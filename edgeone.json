@@ -1,0 +1,19 @@
+{
+  "name": "cad-viewer",
+  "nodeVersion": "24.18.0",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "buildCommand": "export NODE_OPTIONS=--max-old-space-size=4096 && pnpm exec nx run-many -t build --projects=@mlightcad/cad-viewer-example,@mlightcad/cad-simple-viewer-example,@mlightcad/cad-diff-viewer-example && node tools/copy-makers-site.mjs",
+  "outputDirectory": "tmp/makers-site",
+  "redirects": [
+    {
+      "source": "/diff",
+      "destination": "/diff/",
+      "statusCode": 302
+    },
+    {
+      "source": "/simple",
+      "destination": "/simple/",
+      "statusCode": 302
+    }
+  ]
+}

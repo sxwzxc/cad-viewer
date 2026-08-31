@@ -1,0 +1,91 @@
+name: Sync upstream
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly on Monday 03:00 UTC. Fork scheduled workflows are disabled by default;
+    # enable them once in the GitHub Actions tab. Keep workflow_dispatch for manual runs.
+    - cron: '0 3 * * 1'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote and fetch
+        run: |
+          if git remote get-url upstream >/dev/null 2>&1; then
+            git remote set-url upstream https://github.com/mlightcad/cad-viewer.git
+          else
+            git remote add upstream https://github.com/mlightcad/cad-viewer.git
+          fi
+          git fetch upstream --prune
+          git fetch origin --prune
+          echo "upstream/main: $(git rev-parse --short upstream/main)"
+          echo "origin/main:   $(git rev-parse --short origin/main)"
+
+      - name: Merge upstream/main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          git checkout -B main origin/main
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Already up-to-date with upstream/main — nothing to do."
+            exit 0
+          fi
+
+          echo "Attempting merge: git merge --no-edit upstream/main"
+          if git merge --no-edit upstream/main; then
+            echo "Merge succeeded without conflicts. Pushing to origin/main..."
+            git push origin HEAD:main
+            echo "Sync complete."
+            exit 0
+          fi
+
+          echo "Merge resulted in conflicts — aborting and opening a compare PR."
+          git merge --abort
+
+          # REST/API head is owner:branch, not the compare-URL owner:repo:branch form.
+          HEAD_REF="mlightcad:main"
+          OPEN_COUNT=$(gh pr list --repo "${{ github.repository }}" \
+            --base main --head "$HEAD_REF" --state open --json number --jq 'length')
+
+          if [ "$OPEN_COUNT" != "0" ]; then
+            echo "PR already exists for $HEAD_REF -> main — skipping creation."
+          else
+            echo "Creating PR $HEAD_REF -> main"
+            BODY=$(printf '%s\n' \
+              'Automated sync from mlightcad/cad-viewer:main hit conflicts.' \
+              '' \
+              '- Upstream: https://github.com/mlightcad/cad-viewer' \
+              "- Head: $HEAD_REF" \
+              '- Base: main (this fork)' \
+              '- Action: resolve conflicts in the compare PR and merge it.' \
+              '' \
+              'Created by .github/workflows/sync-upstream.yml.')
+            gh api "repos/${{ github.repository }}/pulls" \
+              -f title="chore: sync upstream/main $(date +%Y-%m-%d)" \
+              -f head="$HEAD_REF" \
+              -f base="main" \
+              -f body="$BODY"
+          fi
+
+          echo "Conflict requires manual resolution — marking job as failed."
+          exit 1
