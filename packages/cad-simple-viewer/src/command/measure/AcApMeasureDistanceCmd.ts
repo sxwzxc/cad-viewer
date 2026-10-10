@@ -12,21 +12,20 @@ import {
 import { AcApContext } from '../../app'
 import {
   AcEdBaseView,
-  AcEdCommand,
-  AcEdCorsorType,
-  AcEdOpenMode,
   AcEdPreviewJig,
   AcEdPromptPointOptions,
-  AcEdPromptStatus,
-  AcEdViewMode
+  AcEdPromptStatus
 } from '../../editor'
 import { AcApI18n } from '../../i18n'
 import {
+  acapAdaptiveMeasureBadgeFontSize,
   acapGetCurrentMeasurementStyle,
   acapGetMeasurementColor,
   acapGetMeasurementFontSize,
   acapMeasurementCanvasLineWidth,
   type AcApMeasurementStyle,
+  acapScaleMeasureOverlayPx,
+  acapScreenSegmentLengthPx,
   formatMeasurementLength,
   MEASUREMENT_LINE_WEIGHT
 } from '../../util'
@@ -35,6 +34,11 @@ import {
   AcApHtmlLivePreview,
   acapStrokeLiveSegment
 } from '../overlay/AcApHtmlLivePreview'
+import {
+  ACAP_OVERLAY_ARROW_SIZE_PX,
+  acapSyncLiveOverlayTextHeight
+} from '../overlay/AcApOverlayDrawUtil'
+import { AcApMeasureDrawCmd } from './AcApMeasureDrawCmd'
 import { MEASUREMENT_LIVE_LAYER } from './AcApMeasurementStore'
 import { AcApMeasureDistanceEntity } from './entity'
 
@@ -99,6 +103,11 @@ export class AcApMeasureDistanceJig extends AcEdPreviewJig<AcGePoint3dLike> {
       fontSize: acapGetMeasurementFontSize()
     })
     this._htManager.add(this._badge)
+    acapSyncLiveOverlayTextHeight(
+      this._view,
+      [this._badge],
+      acapGetCurrentMeasurementStyle(this._db)
+    )
     // `add()` applies layout visibility and would force the empty capsule on.
     this._badge.object.visible = false
 
@@ -118,10 +127,33 @@ export class AcApMeasureDistanceJig extends AcEdPreviewJig<AcGePoint3dLike> {
     this._p2 = p2
     this._color = acapGetMeasurementColor(this._db)
     this._badge.setColor(this._color)
-    this._badge.setFontSize(acapGetMeasurementFontSize())
+    const style = acapGetCurrentMeasurementStyle(this._db)
 
     const dist = calcDist(this._p1, p2)
     const lineWidth = acapMeasurementCanvasLineWidth(MEASUREMENT_LINE_WEIGHT)
+    const linePx = acapScreenSegmentLengthPx(
+      p => this._view.worldToScreen(p),
+      this._p1,
+      p2
+    )
+
+    if (dist < 0.0001) {
+      this._preview.acapSetDraw((ctx, view) => {
+        acapStrokeLiveSegment(ctx, view, this._p1, this._p2, this._color, lineWidth, {
+          arrow: 'both'
+        })
+      })
+      this._badge.object.visible = false
+      return
+    }
+
+    const label = formatMeasurementLength(this._db, dist)
+    const fontSize = acapAdaptiveMeasureBadgeFontSize(label, style, linePx)
+    const arrowSizePx = acapScaleMeasureOverlayPx(
+      ACAP_OVERLAY_ARROW_SIZE_PX,
+      style.fontSize,
+      fontSize
+    )
     this._preview.acapSetDraw((ctx, view) => {
       acapStrokeLiveSegment(
         ctx,
@@ -130,16 +162,15 @@ export class AcApMeasureDistanceJig extends AcEdPreviewJig<AcGePoint3dLike> {
         this._p2,
         this._color,
         lineWidth,
-        { arrow: 'both' }
+        { arrow: 'both', arrowSizePx }
       )
     })
-
-    if (dist < 0.0001) {
-      this._badge.object.visible = false
-      return
-    }
-
-    this._badge.setText(formatMeasurementLength(this._db, dist))
+    this._badge.setFontSize(fontSize)
+    acapSyncLiveOverlayTextHeight(this._view, [this._badge], {
+      ...style,
+      fontSize
+    })
+    this._badge.setText(label)
     this._badge.setPosition({
       x: (this._p1.x + p2.x) / 2,
       y: (this._p1.y + p2.y) / 2
@@ -160,44 +191,37 @@ export class AcApMeasureDistanceJig extends AcEdPreviewJig<AcGePoint3dLike> {
  * Prompts for two world points, then commits a measurement overlay.
  * Interactive preview is HTML-only (canvas stroke + badge).
  */
-export class AcApMeasureDistanceCmd extends AcEdCommand {
-  constructor() {
-    super()
-    this.mode = AcEdOpenMode.Read
-  }
-
+export class AcApMeasureDistanceCmd extends AcApMeasureDrawCmd {
   async execute(context: AcApContext) {
     const editor = context.view.editor
     const db = context.doc.database
     const color = acapGetMeasurementColor(db)
 
-    await context.view.withMode(AcEdViewMode.SELECTION, () =>
-      editor.withCursor(AcEdCorsorType.Crosshair, async () => {
-        const p1Prompt = new AcEdPromptPointOptions(
-          AcApI18n.t('jig.measureDistance.firstPoint')
-        )
-        const p1Result = await editor.getPoint(p1Prompt)
-        if (p1Result.status !== AcEdPromptStatus.OK) return
-        const p1 = p1Result.value!
+    await this.withMeasureInput(context, async () => {
+      const p1Prompt = new AcEdPromptPointOptions(
+        AcApI18n.t('jig.measureDistance.firstPoint')
+      )
+      const p1Result = await editor.getPoint(p1Prompt)
+      if (p1Result.status !== AcEdPromptStatus.OK) return
+      const p1 = p1Result.value!
 
-        const p2Prompt = new AcEdPromptPointOptions(
-          AcApI18n.t('jig.measureDistance.secondPoint')
-        )
-        p2Prompt.useBasePoint = true
-        p2Prompt.basePoint = new AcGePoint3d(p1)
-        p2Prompt.jig = new AcApMeasureDistanceJig(context.view, db, p1, color)
-        const p2Result = await editor.getPoint(p2Prompt)
-        if (p2Result.status !== AcEdPromptStatus.OK) return
-        const p2 = p2Result.value!
+      const p2Prompt = new AcEdPromptPointOptions(
+        AcApI18n.t('jig.measureDistance.secondPoint')
+      )
+      p2Prompt.useBasePoint = true
+      p2Prompt.basePoint = new AcGePoint3d(p1)
+      p2Prompt.jig = new AcApMeasureDistanceJig(context.view, db, p1, color)
+      const p2Result = await editor.getPoint(p2Prompt)
+      if (p2Result.status !== AcEdPromptStatus.OK) return
+      const p2 = p2Result.value!
 
-        placeDistanceMeasurement(
-          context.view as AcTrView2d,
-          db,
-          p1,
-          p2,
-          acapGetCurrentMeasurementStyle(db)
-        )
-      })
-    )
+      placeDistanceMeasurement(
+        context.view as AcTrView2d,
+        db,
+        p1,
+        p2,
+        acapGetCurrentMeasurementStyle(db)
+      )
+    })
   }
 }

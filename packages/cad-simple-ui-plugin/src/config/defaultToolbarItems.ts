@@ -1,7 +1,13 @@
 import {
+  acapBuildDataSourceMenu,
+  AcApDocManager,
+  acapIsSingleLocalOpen,
   type AcApLocale,
+  acapRunDataSourceMenuAction,
+  AcApSettingManager,
   AcEdOpenMode,
   type AcEdUiTheme,
+  acuiCopyDynamicToolbarChildren,
   isMarkupVisible,
   isMeasurementVisible
 } from '@mlightcad/cad-simple-viewer'
@@ -33,6 +39,7 @@ import {
   ICON_MEASURE_DISTANCE,
   ICON_MEASURE_POINT,
   ICON_MEASUREMENT_PANEL,
+  ICON_OPEN,
   ICON_PAN,
   ICON_PLACEMENT_BOTTOM,
   ICON_PLACEMENT_LEFT,
@@ -44,12 +51,14 @@ import {
   ICON_REV_RECT,
   ICON_SELECT,
   ICON_SETTINGS,
+  ICON_SIMULATED_MOUSE,
   ICON_SWITCH_BG,
   ICON_THEME_DARK,
   ICON_THEME_LIGHT,
   ICON_TOOLBAR_PLACEMENT,
   ICON_ZOOM_EXTENT,
   ICON_ZOOM_ORIGINAL,
+  ICON_ZOOM_SMART,
   ICON_ZOOM_WINDOW
 } from '../assets/icons'
 import { acuiCreateLayoutToolbarItem } from './createLayoutToolbarItem'
@@ -119,8 +128,14 @@ const LOCALE_LABELS: Record<AcApLocale, string> = {
   ar: 'toolbar.localeAr'
 }
 
+/**
+ * Locale short-code badge for toolbar icons.
+ *
+ * Uses HTML text (not SVG `<text>`) so the glyph stays sharp at the 18px
+ * toolbar icon size. SVG text often looks soft/blurry when CSS-scaled.
+ */
 function localeBadgeIcon(badge: string): string {
-  return `<span style="font-size:10px;font-weight:700;line-height:1">${badge}</span>`
+  return `<span class="ml-ex-ui-locale-badge">${badge}</span>`
 }
 
 function acuiCreateToolbarLocaleItem(
@@ -172,12 +187,78 @@ function acuiCreateThemeToolbarItem(
   }
 }
 
+/**
+ * Builds the simulated-mouse toggle for touch precise point picking.
+ *
+ * Bound to {@link AcApSettings.useSimulatedMouseOnTouch}. When on, long-press
+ * picks use a crosshair above the finger; when off, the magnifier loupe
+ * tracks the fingertip.
+ *
+ * @returns Toggle toolbar item.
+ */
+function acuiCreateSimulatedMouseToolbarItem(): AcUiToolbarItem {
+  const toggle = () =>
+    AcApSettingManager.instance.toggle('useSimulatedMouseOnTouch')
+  return {
+    id: 'simulated-mouse',
+    requiresDocument: false,
+    toggle: {
+      getValue: () =>
+        !!AcApSettingManager.instance.get('useSimulatedMouseOnTouch'),
+      on: {
+        label: 'toolbar.simulatedMouseOn',
+        icon: ICON_SIMULATED_MOUSE,
+        action: toggle
+      },
+      off: {
+        label: 'toolbar.simulatedMouseOff',
+        icon: ICON_SIMULATED_MOUSE,
+        action: toggle
+      }
+    }
+  }
+}
+
+/** Whether transient reading mode is active on the current view. */
+function acuiIsReadingModeEnabled(): boolean {
+  try {
+    return AcApDocManager.instance.isReadingModeEnabled()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Builds the reading-mode toggle (black linework on a white canvas).
+ *
+ * @returns Toggle toolbar item bound to the `readingmode` command.
+ */
+function acuiCreateReadingModeToolbarItem(): AcUiToolbarItem {
+  return {
+    id: 'reading-mode',
+    requiresDocument: true,
+    toggle: {
+      getValue: acuiIsReadingModeEnabled,
+      on: {
+        label: 'toolbar.readingMode',
+        icon: ICON_READING_MODE,
+        command: 'readingmode'
+      },
+      off: {
+        label: 'toolbar.readingMode',
+        icon: ICON_READING_MODE,
+        command: 'readingmode'
+      }
+    }
+  }
+}
+
 function acuiCreateMeasureToolbarItem(): AcUiToolbarItem {
   return {
     id: 'measure',
     label: 'toolbar.measure',
     icon: ICON_MEASURE,
-    childrenUi: 'sticky-toolbar',
+    childrenUi: 'toolbar',
     children: [
       {
         id: 'measure-distance',
@@ -269,7 +350,7 @@ function acuiCreateAnnotationToolbarItem(): AcUiToolbarItem {
     label: 'toolbar.annotation',
     icon: ICON_ANNOTATION,
     minOpenMode: AcEdOpenMode.Review,
-    childrenUi: 'sticky-toolbar',
+    childrenUi: 'toolbar',
     children: [
       {
         id: 'markup-cloud',
@@ -362,7 +443,10 @@ function acuiCreateAnnotationToolbarItem(): AcUiToolbarItem {
 }
 
 /**
- * Builds the phone-layout zoom parent with original / extents / window children.
+ * Builds the zoom parent with saved / extents / smart / window children.
+ *
+ * Matches the HTML export offline viewer zoom strip
+ * (`childrenUi: 'toolbar'`, four child actions).
  *
  * @returns Zoom toolbar item with dismissible icon sub-toolbar children.
  */
@@ -372,18 +456,26 @@ export function acuiCreateZoomToolbarItem(): AcUiToolbarItem {
     label: 'toolbar.zoom',
     icon: ICON_ZOOM_EXTENT,
     childrenUi: 'toolbar',
+    childIcon: 'selected',
+    selectedChildId: 'zoom-extent',
     children: [
       {
-        id: 'zoom-original',
-        label: 'toolbar.zoomOriginal',
+        id: 'zoom-saved',
+        label: 'toolbar.zoomSaved',
         icon: ICON_ZOOM_ORIGINAL,
-        command: 'zoom\noriginal'
+        command: 'zoom\nsaved'
       },
       {
         id: 'zoom-extent',
         label: 'toolbar.zoomExtent',
         icon: ICON_ZOOM_EXTENT,
         command: 'zoom\nall'
+      },
+      {
+        id: 'zoom-smart-extents',
+        label: 'toolbar.zoomSmartExtents',
+        icon: ICON_ZOOM_SMART,
+        command: 'zoom\nsmart'
       },
       {
         id: 'zoom-window',
@@ -396,9 +488,11 @@ export function acuiCreateZoomToolbarItem(): AcUiToolbarItem {
 }
 
 /**
- * Builds the phone-layout settings parent (theme, background, language).
+ * Builds the settings parent (simulated mouse, dock placement, theme, language).
  *
- * @param context - Optional callbacks for theme toggle and locale submenu items.
+ * Used by phone and by desktop/pad so chrome preferences live in one strip.
+ *
+ * @param context - Optional callbacks for theme toggle, locale, and placement.
  * @returns Settings toolbar item with nested dismissible sub-toolbars.
  */
 export function acuiCreateSettingsToolbarItem(
@@ -411,23 +505,70 @@ export function acuiCreateSettingsToolbarItem(
     requiresDocument: false,
     childrenUi: 'toolbar',
     children: [
+      acuiCreateSimulatedMouseToolbarItem(),
+      acuiCreateToolbarPlacementItem(context),
       acuiCreateThemeToolbarItem(context),
       {
         id: 'switch-bg',
         label: 'toolbar.switchBg',
         icon: ICON_SWITCH_BG,
-        command: 'switchbg'
+        command: 'switchbg',
+        // Reading mode forces a white canvas; switching background has no
+        // visible effect until reading mode is turned off.
+        disabled: acuiIsReadingModeEnabled
       },
-      {
-        id: 'reading-mode',
-        label: 'toolbar.readingMode',
-        icon: ICON_READING_MODE,
-        requiresDocument: true,
-        command: 'readingmode'
-      },
+      acuiCreateReadingModeToolbarItem(),
       acuiCreateToolbarLocaleItem(context)
     ]
   }
+}
+
+/**
+ * Builds an Open toolbar item whose children mirror registered data sources.
+ *
+ * When only the local source is registered, clicking Open runs the local
+ * picker directly. Otherwise a submenu lists Local / URL / cloud sources
+ * (Sign in vs Open vs Sign out for auth sources).
+ */
+function acuiCreateOpenToolbarItem(): AcUiToolbarItem {
+  const item: AcUiToolbarItem = {
+    id: 'open',
+    label: 'toolbar.open',
+    icon: ICON_OPEN,
+    requiresDocument: false,
+    childrenUi: 'menu',
+    action: () => {
+      try {
+        const sources = AcApDocManager.instance.dataSourceManager.list()
+        if (acapIsSingleLocalOpen(sources)) {
+          const menu = acapBuildDataSourceMenu(sources)
+          const local = menu[0]
+          if (local) void acapRunDataSourceMenuAction(local)
+        }
+      } catch {
+        // DocManager not ready
+      }
+    }
+  }
+
+  return acuiCopyDynamicToolbarChildren(item, () => {
+    try {
+      const sources = AcApDocManager.instance.dataSourceManager.list()
+      if (acapIsSingleLocalOpen(sources)) {
+        return []
+      }
+      return acapBuildDataSourceMenu(sources).map(menuItem => ({
+        id: `ds-${menuItem.id}`,
+        label: menuItem.label,
+        requiresDocument: false,
+        action: () => {
+          void acapRunDataSourceMenuAction(menuItem)
+        }
+      }))
+    } catch {
+      return []
+    }
+  })
 }
 
 /**
@@ -440,6 +581,7 @@ export function acuiCreateDefaultToolbarItems(
   context?: AcUiDefaultToolbarContext
 ): AcUiToolbarItem[] {
   const items: AcUiToolbarItem[] = [
+    acuiCreateOpenToolbarItem(),
     {
       id: 'select',
       label: 'toolbar.select',
@@ -452,18 +594,7 @@ export function acuiCreateDefaultToolbarItems(
       icon: ICON_PAN,
       command: 'pan'
     },
-    {
-      id: 'zoom-extent',
-      label: 'toolbar.zoomExtent',
-      icon: ICON_ZOOM_EXTENT,
-      command: 'zoom\nall'
-    },
-    {
-      id: 'zoom-window',
-      label: 'toolbar.zoomWindow',
-      icon: ICON_ZOOM_WINDOW,
-      command: 'zoom\nwindow'
-    },
+    acuiCreateZoomToolbarItem(),
     {
       id: 'layer',
       label: 'toolbar.layer',
@@ -471,19 +602,6 @@ export function acuiCreateDefaultToolbarItems(
       command: 'layer'
     },
     acuiCreateLayoutToolbarItem(),
-    {
-      id: 'switch-bg',
-      label: 'toolbar.switchBg',
-      icon: ICON_SWITCH_BG,
-      command: 'switchbg'
-    },
-    {
-      id: 'reading-mode',
-      label: 'toolbar.readingMode',
-      icon: ICON_READING_MODE,
-      requiresDocument: true,
-      command: 'readingmode'
-    },
     acuiCreateMeasureToolbarItem(),
     acuiCreateAnnotationToolbarItem(),
     {
@@ -516,9 +634,7 @@ export function acuiCreateDefaultToolbarItems(
       type: 'separator',
       id: 'sep-settings'
     },
-    acuiCreateToolbarPlacementItem(context),
-    acuiCreateThemeToolbarItem(context),
-    acuiCreateToolbarLocaleItem(context)
+    acuiCreateSettingsToolbarItem(context)
   ]
 
   return items

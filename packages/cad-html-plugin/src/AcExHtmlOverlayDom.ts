@@ -17,9 +17,25 @@ export const ACEX_OVERLAY_ARROW_SIZE_PX = 12
 export const ACEX_OVERLAY_ARROW_WCS = 'overlayArrowWcs'
 
 /**
+ * Scales a world-space overlay length (arrow head, etc.) with a font-size change
+ * so arrows stay proportional to the value capsule when the user resizes text.
+ */
+export function acexScaleWcsWithFont(
+  sizeWcs: number | undefined,
+  prevFontPx: number,
+  nextFontPx: number
+): number | undefined {
+  if (!(sizeWcs != null && sizeWcs > 0)) return sizeWcs
+  if (!(prevFontPx > 0) || !(nextFontPx > 0) || nextFontPx === prevFontPx) {
+    return sizeWcs
+  }
+  return sizeWcs * (nextFontPx / prevFontPx)
+}
+
+/**
  * Scale factor for HTML measure/markup overlays relative to first layout.
  */
-export function acExOverlayViewScale(zoom: number, el: HTMLElement): number {
+export function acexOverlayViewScale(zoom: number, el: HTMLElement): number {
   let base = Number(el.dataset[ACEX_OVERLAY_BASE_ZOOM])
   if (!Number.isFinite(base) || base === 0) {
     base = zoom
@@ -29,30 +45,58 @@ export function acExOverlayViewScale(zoom: number, el: HTMLElement): number {
 }
 
 /** Clears the zoom anchor so the next layout re-bases view scale. */
-export function acExResetOverlayViewScale(el: HTMLElement): void {
+export function acexResetOverlayViewScale(el: HTMLElement): void {
   delete el.dataset[ACEX_OVERLAY_BASE_ZOOM]
 }
 
+/**
+ * Seeds or clears view-synced scale for a live preview overlay from draw style.
+ *
+ * Custom WCS keeps world height while zooming; adaptive stays constant in px.
+ */
+export function acexSyncLiveOverlayTextHeight(
+  zoom: number,
+  wcsToScreen: (wcs: { x: number; y: number }) => { x: number; y: number },
+  el: HTMLElement,
+  style: {
+    fontSize: number
+    textHeightMode?: 'adaptive' | 'custom'
+    textHeightWcs?: number
+  }
+): void {
+  const custom =
+    style.textHeightMode === 'custom' &&
+    style.textHeightWcs != null &&
+    style.textHeightWcs > 0 &&
+    style.fontSize > 0
+  if (custom) {
+    acexSeedOverlaySizesFromWcs(zoom, wcsToScreen, {
+      textHeightWcs: style.textHeightWcs,
+      fontSizePx: style.fontSize,
+      elements: [el]
+    })
+    return
+  }
+  acexResetOverlayViewScale(el)
+}
+
 /** CSS transform prefix before optional view-synced `scale()`. */
-export function acExOverlayTransformPrefix(el: HTMLElement): string {
+export function acexOverlayTransformPrefix(el: HTMLElement): string {
   if (el.classList.contains('mlcad-measure-badge--coordinate')) {
     return 'translate(-50%, calc(-50% - 16px))'
-  }
-  if (el.classList.contains('mlcad-measure-live-label')) {
-    return 'translate(-50%, -120%)'
   }
   return 'translate(-50%, -50%)'
 }
 
 /** Composes centering transform with optional view-synced scale. */
-export function acExOverlayTransform(el: HTMLElement, scale: number): string {
-  const prefix = acExOverlayTransformPrefix(el)
+export function acexOverlayTransform(el: HTMLElement, scale: number): string {
+  const prefix = acexOverlayTransformPrefix(el)
   if (scale === 1) return prefix
   return `${prefix} scale(${scale})`
 }
 
 /** CSS px per one WCS unit along +X. */
-export function acExPixelsPerWorldUnit(
+export function acexPixelsPerWorldUnit(
   wcsToScreen: (wcs: { x: number; y: number }) => { x: number; y: number }
 ): number {
   const a = wcsToScreen({ x: 0, y: 0 })
@@ -61,14 +105,14 @@ export function acExPixelsPerWorldUnit(
   return ppu > 0 && Number.isFinite(ppu) ? ppu : 1
 }
 
-export function acExScreenPxToWcs(
+export function acexScreenPxToWcs(
   px: number,
   wcsToScreen: (wcs: { x: number; y: number }) => { x: number; y: number }
 ): number {
-  return px / acExPixelsPerWorldUnit(wcsToScreen)
+  return px / acexPixelsPerWorldUnit(wcsToScreen)
 }
 
-export function acExSeedOverlayStrokeWcs(
+export function acexSeedOverlayStrokeWcs(
   canvas: HTMLElement,
   strokeWidthWcs: number
 ): void {
@@ -76,7 +120,7 @@ export function acExSeedOverlayStrokeWcs(
   canvas.dataset[ACEX_OVERLAY_STROKE_WCS] = String(strokeWidthWcs)
 }
 
-export function acExSeedOverlayArrowWcs(
+export function acexSeedOverlayArrowWcs(
   canvas: HTMLElement,
   arrowSizeWcs: number
 ): void {
@@ -88,7 +132,7 @@ export function acExSeedOverlayArrowWcs(
  * View-synced canvas stroke. Prefer strokeWidthWcs; else convert baseLineWidth
  * to WCS on first paint and stash on the canvas.
  */
-export function acExScaledCanvasLineWidth(
+export function acexScaledCanvasLineWidth(
   baseLineWidth: number,
   canvas: HTMLCanvasElement,
   zoom: number,
@@ -102,7 +146,7 @@ export function acExScaledCanvasLineWidth(
     return 1
   }
   if (options?.wcsToScreen) {
-    const ppu = acExPixelsPerWorldUnit(options.wcsToScreen)
+    const ppu = acexPixelsPerWorldUnit(options.wcsToScreen)
     let wcs =
       options.strokeWidthWcs != null && options.strokeWidthWcs > 0
         ? options.strokeWidthWcs
@@ -115,7 +159,7 @@ export function acExScaledCanvasLineWidth(
     }
     return Math.max(0.5, wcs * ppu)
   }
-  return baseLineWidth * acExOverlayViewScale(zoom, canvas)
+  return baseLineWidth * acexOverlayViewScale(zoom, canvas)
 }
 
 /**
@@ -124,15 +168,15 @@ export function acExScaledCanvasLineWidth(
  * Used by committed distance measurements and arrow markups. Seeds
  * {@link ACEX_OVERLAY_ARROW_SIZE_PX} as WCS on first paint (the size shown
  * during the jig) unless `arrowSizeWcs` is provided. Live previews should use
- * `acExOverlayArrowSize` so the head stays a constant screen size
+ * `acexOverlayArrowSize` so the head stays a constant screen size
  * while the user zooms during placement.
  */
-export function acExScaledOverlayArrowSize(
+export function acexScaledOverlayArrowSize(
   canvas: HTMLCanvasElement,
   wcsToScreen: (wcs: { x: number; y: number }) => { x: number; y: number },
   arrowSizeWcs?: number
 ): number {
-  const ppu = acExPixelsPerWorldUnit(wcsToScreen)
+  const ppu = acexPixelsPerWorldUnit(wcsToScreen)
   let wcs =
     arrowSizeWcs != null && arrowSizeWcs > 0
       ? arrowSizeWcs
@@ -147,19 +191,19 @@ export function acExScaledOverlayArrowSize(
 }
 
 /** Seed DOM baseZoom so CSS size matches WCS at current camera. */
-export function acExBaseZoomFromWcsSize(
+export function acexBaseZoomFromWcsSize(
   screenPxAtCreate: number,
   sizeWcs: number,
   zoom: number,
   wcsToScreen: (wcs: { x: number; y: number }) => { x: number; y: number }
 ): number | null {
-  const ppu = acExPixelsPerWorldUnit(wcsToScreen)
+  const ppu = acexPixelsPerWorldUnit(wcsToScreen)
   if (!(zoom > 0) || !(screenPxAtCreate > 0) || !(sizeWcs > 0)) return null
   const base = (screenPxAtCreate * zoom) / (sizeWcs * ppu)
   return base > 0 && Number.isFinite(base) ? base : null
 }
 
-export function acExSeedOverlaySizesFromWcs(
+export function acexSeedOverlaySizesFromWcs(
   zoom: number,
   wcsToScreen: (wcs: { x: number; y: number }) => { x: number; y: number },
   options: {
@@ -177,7 +221,7 @@ export function acExSeedOverlaySizesFromWcs(
 
   if (strokeWidthWcs != null && strokeWidthWcs > 0) {
     for (const canvas of canvases ?? []) {
-      acExSeedOverlayStrokeWcs(canvas, strokeWidthWcs)
+      acexSeedOverlayStrokeWcs(canvas, strokeWidthWcs)
     }
   } else if (options.strokeScreenPx === 0) {
     for (const canvas of canvases ?? []) {
@@ -187,7 +231,7 @@ export function acExSeedOverlaySizesFromWcs(
 
   if (options.arrowSizeWcs != null && options.arrowSizeWcs > 0) {
     for (const canvas of canvases ?? []) {
-      acExSeedOverlayArrowWcs(canvas, options.arrowSizeWcs)
+      acexSeedOverlayArrowWcs(canvas, options.arrowSizeWcs)
     }
   }
 
@@ -204,6 +248,13 @@ export function acExSeedOverlaySizesFromWcs(
     }
   }
 
+  if (fontSizePx != null && fontSizePx > 0) {
+    for (const canvas of canvases ?? []) {
+      // Selection glow (drop-shadow em) tracks the paired badge font size.
+      canvas.style.fontSize = `${fontSizePx}px`
+    }
+  }
+
   // Pair text screen/WCS axes only — never mix fontSize with strokeWidthWcs.
   if (
     !(fontSizePx != null && fontSizePx > 0) ||
@@ -212,7 +263,7 @@ export function acExSeedOverlaySizesFromWcs(
     return
   }
 
-  const baseZoom = acExBaseZoomFromWcsSize(
+  const baseZoom = acexBaseZoomFromWcsSize(
     fontSizePx,
     textHeightWcs,
     zoom,
@@ -221,6 +272,13 @@ export function acExSeedOverlaySizesFromWcs(
   if (baseZoom == null) return
   for (const el of elements ?? []) {
     el.dataset[ACEX_OVERLAY_BASE_ZOOM] = String(baseZoom)
+    if (
+      el.classList.contains('mlcad-measure-dot') ||
+      el.classList.contains('mlcad-markup-dot') ||
+      el.classList.contains('mlcad-markup-preview-dot')
+    ) {
+      el.style.fontSize = `${fontSizePx}px`
+    }
   }
 }
 
@@ -228,7 +286,7 @@ export function acExSeedOverlaySizesFromWcs(
  * Positions one WCS-anchored overlay in root-local coordinates and applies
  * view-synced scale when `zoom` is provided.
  */
-export function acExPositionWcsOverlay(
+export function acexPositionWcsOverlay(
   el: HTMLElement,
   screen: { x: number; y: number },
   rootRect: DOMRect,
@@ -236,14 +294,14 @@ export function acExPositionWcsOverlay(
 ): void {
   el.style.left = `${screen.x - rootRect.left}px`
   el.style.top = `${screen.y - rootRect.top}px`
-  const scale = acExOverlayViewScale(zoom, el)
-  el.style.transform = acExOverlayTransform(el, scale)
+  const scale = acexOverlayViewScale(zoom, el)
+  el.style.transform = acexOverlayTransform(el, scale)
 }
 
 /**
  * Positions a cursor-following overlay in root-local client coordinates.
  */
-export function acExPositionClientOverlay(
+export function acexPositionClientOverlay(
   el: HTMLElement,
   clientX: number,
   clientY: number,
@@ -252,6 +310,6 @@ export function acExPositionClientOverlay(
 ): void {
   el.style.left = `${clientX - rootRect.left}px`
   el.style.top = `${clientY - rootRect.top}px`
-  const scale = acExOverlayViewScale(zoom, el)
-  el.style.transform = acExOverlayTransform(el, scale)
+  const scale = acexOverlayViewScale(zoom, el)
+  el.style.transform = acexOverlayTransform(el, scale)
 }

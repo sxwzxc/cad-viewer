@@ -25,12 +25,12 @@ function createEventStub() {
 }
 
 jest.mock('@mlightcad/cad-simple-viewer', () => {
+  const { createCadSimpleViewerMock } = require('./helpers/mockCadSimpleViewer')
   const layout = jest.requireActual(
     '../../cad-simple-viewer/src/editor/global/AcEdUiLayout'
   ) as typeof import('../../cad-simple-viewer/src/editor/global/AcEdUiLayout')
 
-  return {
-    ...layout,
+  return createCadSimpleViewerMock({
     acedIsMobileUiLayout: () =>
       window.matchMedia?.(layout.ML_UI_MOBILE_MEDIA_QUERY).matches ?? false,
     acedIsCompactUiLayout: () =>
@@ -73,7 +73,12 @@ jest.mock('@mlightcad/cad-simple-viewer', () => {
       setCurrentLocale: jest.fn()
     },
     AcApPlugin: class {},
-    acapSetDrawStyleHostHasRibbon: jest.fn(),
+    AcApSettingManager: {
+      instance: {
+        set: jest.fn(),
+        clearSessionOverride: jest.fn()
+      }
+    },
     isMarkupVisible: () => true,
     isMeasurementVisible: () => true,
     AcEdCommand: class {},
@@ -95,6 +100,14 @@ jest.mock('@mlightcad/cad-simple-viewer', () => {
       Read: 0,
       Review: 4,
       Write: 8
+    },
+    acapBindToolbarDocState: (tb: { setDocState: (s: object) => void }) => {
+      tb.setDocState({
+        hasDocument: true,
+        isOpening: false,
+        openMode: 8
+      })
+      return () => undefined
     },
     AcEdUiTheme: {},
     acedApplyUiTheme: jest.fn(),
@@ -128,7 +141,7 @@ jest.mock('@mlightcad/cad-simple-viewer', () => {
     focusMeasurement: jest.fn(),
     removeMeasurement: jest.fn(),
     clearLayoutMeasurements: jest.fn()
-  }
+  })
 })
 
 jest.mock('@mlightcad/data-model', () => ({

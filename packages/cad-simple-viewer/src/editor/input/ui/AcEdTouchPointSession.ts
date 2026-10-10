@@ -1,13 +1,19 @@
 /**
- * Long-press delay before the snap loupe appears, in milliseconds.
+ * Long-press / short-tap state machine for touch point picking.
+ *
+ * Timing constants live in {@link ./AcEdTouchPointTiming} so the offline HTML
+ * viewer can share the same values without importing this session module.
  */
-export const ACED_TOUCH_POINT_LONG_PRESS_MS = 350
 
-/**
- * Pointer movement in CSS pixels that cancels a pending long-press so the
- * gesture can be treated as a pan instead of a pick.
- */
-export const ACED_TOUCH_POINT_MOVE_CANCEL_PX = 10
+import {
+  ACED_TOUCH_POINT_LONG_PRESS_MS,
+  ACED_TOUCH_POINT_MOVE_CANCEL_PX
+} from './AcEdTouchPointTiming'
+
+export {
+  ACED_TOUCH_POINT_LONG_PRESS_MS,
+  ACED_TOUCH_POINT_MOVE_CANCEL_PX
+} from './AcEdTouchPointTiming'
 
 let followingClickSink: ((event: Event) => void) | null = null
 let followingClickSinkTimer: ReturnType<typeof setTimeout> | null = null
@@ -20,7 +26,6 @@ let followingClickSinkTimer: ReturnType<typeof setTimeout> | null = null
  * command (measure distance) would commit both points from one long-press.
  */
 export const ACED_TOUCH_MOUSE_GUARD_MS = 1000
-
 let ignoreCompatMouseUntil = 0
 
 /**
@@ -122,6 +127,24 @@ export function acedShouldIgnoreCompatMouse(
   now: number = performance.now()
 ): boolean {
   return followingClickSink != null || now < ignoreCompatMouseUntil
+}
+
+/**
+ * Whether a `contextmenu` event is leftover from a touch long-press.
+ *
+ * Phones synthesize `contextmenu` ~500ms after finger-down — the same
+ * gesture that opens the snap loupe. Point prompts treat right-click as
+ * Enter; that leftover must not cancel the command.
+ *
+ * After `pointercancel`, some browsers omit `firesTouchEvents` and report
+ * `button === 2`. The compat-mouse guard covers that case.
+ *
+ * @param event - Context-menu mouse event.
+ * @returns True when the event should not be treated as right-click Enter.
+ */
+export function acedIsTouchLongPressContextMenu(event: MouseEvent): boolean {
+  if (acedIsTouchDerivedMouseEvent(event)) return true
+  return acedShouldIgnoreCompatMouse()
 }
 
 /**

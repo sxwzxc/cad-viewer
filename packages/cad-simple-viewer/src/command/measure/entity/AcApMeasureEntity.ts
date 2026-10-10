@@ -7,6 +7,7 @@ import {
   AcTrHtmlGroup} from '@mlightcad/three-renderer'
 
 import {
+  acapCloneMeasurementStyle,
   acapMeasurementCanvasLineWidth,
   type AcApMeasurementStyle
 } from '../../../util'
@@ -266,17 +267,41 @@ export abstract class AcApMeasureEntity
   }
 
   /**
-   * Seeds imported WCS sizes onto HTML overlays and canvases before first paint.
+   * Live store style for a just-drawn measurement.
+   *
+   * Fit-to-screen may clamp the badge font below the session preference; the
+   * committed live style must match what was painted so later color-only
+   * paints do not restore the unclamped size.
+   */
+  protected committedLiveStyle(
+    badgeFontSize: number,
+    textHeightWcs?: number
+  ): AcApMeasurementStyle {
+    const style = acapCloneMeasurementStyle(this.style)
+    style.fontSize = badgeFontSize
+    if (textHeightWcs != null && textHeightWcs > 0) {
+      style.textHeightWcs = textHeightWcs
+    }
+    return style
+  }
+
+  /**
+   * Seeds world-space sizes onto HTML overlays and canvases before first paint.
+   *
+   * Prefers an explicit import {@link textHeightWcs}. Otherwise resolves from
+   * the live style: custom keeps the authored WCS height; Fit-to-screen bakes
+   * the current screen font size into WCS at commit time.
    */
   protected seedOverlaySizes(
     view: AcTrView2d,
     elements: readonly AcTrHtmlElement[],
     canvases: readonly HTMLElement[] = []
   ): void {
+    const sidecar = this.serializeStyle(view)
     acapSeedOverlaySizesFromWcs(view, {
-      textHeightWcs: this.textHeightWcs,
+      textHeightWcs: this.textHeightWcs ?? sidecar.textHeightWcs,
       strokeWidthWcs: this.strokeWidthWcs,
-      arrowSizeWcs: this.arrowSizeWcs,
+      arrowSizeWcs: this.arrowSizeWcs ?? sidecar.arrowSizeWcs,
       fontSizePx: this.style.fontSize,
       strokeScreenPx: acapMeasurementCanvasLineWidth(this.style.lineWeight),
       elements,

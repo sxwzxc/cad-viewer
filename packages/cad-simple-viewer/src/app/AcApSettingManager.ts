@@ -35,20 +35,34 @@ export interface AcApSettings {
   isShowCoordinate: boolean
   /** Whether entity info card is visible */
   isShowEntityInfo: boolean
-  /** Whether file name is visible */
-  isShowFileName: boolean
   /** Whether language selector is visible */
   isShowLanguageSelector: boolean
   /** Whether the command ribbon is visible */
   isShowRibbon: boolean
   /** Whether the toolbar is visible */
   isShowToolbar: boolean
+  /** Whether the floating shortcut toolbar (undo/redo/erase) is visible */
+  isShowShortCutToolbar: boolean
   /** Whether performance statistics are displayed */
   isShowStats: boolean
   /** Font mapping configuration for text rendering */
   fontMapping: AcApFontMapping
   /** Object snap modes */
   osnapModes: number
+  /** When true, never show the mobile precise point-pick tutorial again. */
+  hideTouchPointTutorial: boolean
+  /**
+   * ISO date (`YYYY-MM-DD`) for which the tutorial is snoozed via
+   * "don't remind me today". Cleared automatically when the date passes.
+   */
+  touchPointTutorialSnoozeDate: string | null
+  /**
+   * When true (default), touch long-press point picks use a simulated mouse
+   * crosshair above the finger so the fingertip does not obscure the sample.
+   * When false, the pick sample is the finger contact. In both modes a long
+   * press still shows the magnifier loupe around the active sample.
+   */
+  useSimulatedMouseOnTouch: boolean
 }
 
 /**
@@ -82,10 +96,10 @@ const DEFAULT_VALUES: AcApSettings = {
   isShowCommandLine: true,
   isShowCoordinate: true,
   isShowEntityInfo: false,
-  isShowFileName: true,
   isShowLanguageSelector: true,
   isShowRibbon: true,
   isShowToolbar: true,
+  isShowShortCutToolbar: true,
   isShowStats: false,
   fontMapping: {},
   osnapModes: acdbOsnapModesToMask([
@@ -95,21 +109,26 @@ const DEFAULT_VALUES: AcApSettings = {
     AcDbOsnapMode.Quadrant,
     AcDbOsnapMode.Intersection,
     AcDbOsnapMode.Nearest
-  ])
+  ]),
+  hideTouchPointTutorial: false,
+  touchPointTutorialSnoozeDate: null,
+  useSimulatedMouseOnTouch: true
 }
 
 /** Default localStorage key for persisting user preferences */
 const DEFAULT_SETTINGS_LS_KEY = 'settings'
 
 /**
- * Maps the pre-ribbon `isShowMainMenu` key onto `isShowRibbon`.
+ * Maps the pre-ribbon `isShowMainMenu` key onto `isShowRibbon`, and drops
+ * obsolete keys such as `isShowFileName` (filename is always shown on the
+ * ribbon header now).
  *
  * Older builds persisted `isShowMainMenu`. After the main menu was replaced
  * by the command ribbon, that preference should keep hiding (or showing)
  * the ribbon for the same users.
  *
  * @param stored - Parsed localStorage object; not mutated.
- * @returns A copy with `isShowRibbon` filled in and `isShowMainMenu` removed.
+ * @returns A copy with `isShowRibbon` filled in and obsolete keys removed.
  */
 export function migrateStoredSettings(
   stored: Record<string, unknown>
@@ -122,6 +141,10 @@ export function migrateStoredSettings(
   }
   if ('isShowMainMenu' in next) {
     delete next.isShowMainMenu
+    migrated = true
+  }
+  if ('isShowFileName' in next) {
+    delete next.isShowFileName
     migrated = true
   }
   return { settings: next, migrated }
@@ -360,6 +383,24 @@ export class AcApSettingManager<T extends AcApSettings = AcApSettings> {
   }
 
   /**
+   * Removes a session-only override so the effective value falls back to
+   * user preferences / defaults.
+   *
+   * @template K - The setting key type
+   * @param key - The setting key whose session override should be cleared
+   */
+  clearSessionOverride<K extends keyof T>(key: K): void {
+    if (!Object.prototype.hasOwnProperty.call(this._session, key)) {
+      return
+    }
+    delete this._session[key]
+    this.events.modified.dispatch({
+      key,
+      value: this.get(key)
+    })
+  }
+
+  /**
    * Gets a setting value.
    *
    * Returns the effective value (defaults ← user ← session).
@@ -472,24 +513,6 @@ export class AcApSettingManager<T extends AcApSettings = AcApSettings> {
   }
 
   /**
-   * Gets whether file name is visible.
-   *
-   * @returns True if file name should be displayed
-   */
-  get isShowFileName() {
-    return this.get('isShowFileName')
-  }
-
-  /**
-   * Sets whether file name is visible.
-   *
-   * @param value - True to show file name
-   */
-  set isShowFileName(value: boolean) {
-    this.set('isShowFileName', value)
-  }
-
-  /**
    * Gets whether language selector is visible.
    *
    * @returns True if language selector should be displayed
@@ -541,6 +564,24 @@ export class AcApSettingManager<T extends AcApSettings = AcApSettings> {
    */
   set isShowToolbar(value: boolean) {
     this.set('isShowToolbar', value)
+  }
+
+  /**
+   * Gets whether the floating shortcut toolbar is visible.
+   *
+   * @returns True if the shortcut toolbar should be shown
+   */
+  get isShowShortCutToolbar() {
+    return this.get('isShowShortCutToolbar')
+  }
+
+  /**
+   * Sets whether the floating shortcut toolbar is visible.
+   *
+   * @param value - True to show the shortcut toolbar
+   */
+  set isShowShortCutToolbar(value: boolean) {
+    this.set('isShowShortCutToolbar', value)
   }
 
   /**

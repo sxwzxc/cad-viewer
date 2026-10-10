@@ -1,10 +1,15 @@
 /** @jest-environment jsdom */
 
 import {
-  acExHtmlIsPhoneLayout,
+  acexHtmlIsCompactLayout,
+  acexHtmlIsMobileNavUi,
+  acexHtmlIsPhoneLayout,
   setupAcExHtmlDrawerSheets
 } from '../src/AcExHtmlDrawerSheet'
-import { ML_UI_MOBILE_MAX_WIDTH } from '../src/AcExHtmlShell'
+import {
+  ML_UI_COMPACT_MAX_WIDTH,
+  ML_UI_MOBILE_MAX_WIDTH
+} from '../src/AcExHtmlShell'
 
 describe('setupAcExHtmlDrawerSheets', () => {
   const originalMatchMedia = window.matchMedia
@@ -26,9 +31,33 @@ describe('setupAcExHtmlDrawerSheets', () => {
 
   it('detects the phone breakpoint', () => {
     mockPhone(true)
-    expect(acExHtmlIsPhoneLayout()).toBe(true)
+    expect(acexHtmlIsPhoneLayout()).toBe(true)
     mockPhone(false)
-    expect(acExHtmlIsPhoneLayout()).toBe(false)
+    expect(acexHtmlIsPhoneLayout()).toBe(false)
+  })
+
+  it('detects the compact (phone or pad) breakpoint', () => {
+    window.matchMedia = (query: string) =>
+      ({
+        matches: query.includes(`${ML_UI_COMPACT_MAX_WIDTH}`),
+        media: query,
+        addEventListener: jest.fn(),
+        removeEventListener: jest.fn()
+      }) as unknown as MediaQueryList
+    expect(acexHtmlIsCompactLayout()).toBe(true)
+    expect(acexHtmlIsMobileNavUi()).toBe(true)
+  })
+
+  it('treats a coarse pointer as mobile nav UI', () => {
+    window.matchMedia = (query: string) =>
+      ({
+        matches: query.includes('pointer: coarse'),
+        media: query,
+        addEventListener: jest.fn(),
+        removeEventListener: jest.fn()
+      }) as unknown as MediaQueryList
+    expect(acexHtmlIsCompactLayout()).toBe(false)
+    expect(acexHtmlIsMobileNavUi()).toBe(true)
   })
 
   it('parks the drawer on the sidebar and closes strips on phone', () => {
@@ -53,7 +82,7 @@ describe('setupAcExHtmlDrawerSheets', () => {
     expect(closeStrips).toHaveBeenCalled()
   })
 
-  it('does not park or close strips on desktop', () => {
+  it('parks the drawer on the sidebar on desktop without closing strips', () => {
     mockPhone(false)
     document.body.innerHTML = `
       <aside id="mlcad-sidebar">
@@ -68,7 +97,9 @@ describe('setupAcExHtmlDrawerSheets', () => {
 
     sheets.preparePhoneOpen(drawer)
 
-    expect(drawer.parentElement?.id).toBe('mlcad-measure-strip-wrap')
+    // Pad/desktop also reparent so dismissing the strip wrap cannot hide an
+    // open results panel; only phone dismisses sibling strips here.
+    expect(drawer.parentElement?.id).toBe('mlcad-sidebar')
     expect(closeStrips).not.toHaveBeenCalled()
   })
 
@@ -132,5 +163,40 @@ describe('setupAcExHtmlDrawerSheets', () => {
     window.dispatchEvent(new Event('resize'))
 
     expect(drawer.parentElement?.id).toBe('mlcad-measure-strip-wrap')
+  })
+
+  it('uses the visible session panel height as the phone drawer inset', () => {
+    mockPhone(true)
+    document.body.innerHTML = `
+      <nav id="mlcad-toolbar"></nav>
+      <div id="mlcad-measure-strip-wrap"></div>
+      <div class="ml-mobile-cmd"><div class="ml-mobile-cmd-panel"></div></div>
+    `
+    const toolbar = document.getElementById('mlcad-toolbar') as HTMLElement
+    const strip = document.getElementById(
+      'mlcad-measure-strip-wrap'
+    ) as HTMLElement
+    const session = document.querySelector(
+      '.ml-mobile-cmd-panel'
+    ) as HTMLElement
+    Object.defineProperty(toolbar, 'offsetHeight', { value: 56 })
+    Object.defineProperty(strip, 'offsetHeight', { value: 80 })
+    Object.defineProperty(session, 'offsetHeight', { value: 40 })
+
+    const sheets = setupAcExHtmlDrawerSheets()
+    sheets.syncInset()
+    expect(
+      document.documentElement.style.getPropertyValue(
+        '--mlcad-phone-drawer-bottom'
+      )
+    ).toBe('40px')
+
+    session.closest('.ml-mobile-cmd')!.setAttribute('hidden', '')
+    sheets.syncInset()
+    expect(
+      document.documentElement.style.getPropertyValue(
+        '--mlcad-phone-drawer-bottom'
+      )
+    ).toBe('136px')
   })
 })

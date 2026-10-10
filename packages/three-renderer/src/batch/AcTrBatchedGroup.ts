@@ -40,14 +40,66 @@ import {
   patchDrawableMaterialFromCache,
   syncStyleMaterialIdFromMaterials
 } from '../util/AcTrObjectUserData'
+import {
+  isThreeLineSegments,
+  isThreeLineSegments2,
+  isThreeMesh,
+  isThreePoints
+} from '../util/AcTrThreeObjectGuards'
 import { isObjectHierarchyVisible } from '../util/AcTrVisibility'
 import { AcTrBatchGeometryUserData } from './AcTrBatchedGeometryInfo'
 import { AcTrBatchedLine } from './AcTrBatchedLine'
 import { AcTrBatchedLine2 } from './AcTrBatchedLine2'
 import { AcTrBatchedMesh } from './AcTrBatchedMesh'
 import { AcTrBatchedPoint } from './AcTrBatchedPoint'
+import {
+  AcTrSharedGeometryBatch,
+  type AcTrSharedGeometryKind
+} from './AcTrSharedGeometryBatch'
 import type { AcTrBatchCompareRole } from './highlight'
-import { type AcTrBatchHighlightKind } from './highlight'
+import {
+  type AcTrBatchHighlightKind,
+  type AcTrBatchHighlightState,
+  installBatchHighlightRenderer
+} from './highlight'
+
+/**
+ * Allocates the next entity draw-order Z offset.
+ *
+ * Wired by the view to {@link AcTrRenderer.allocateDrawOrderZ} so later
+ * entities occlude earlier ones (wipeout masking). Defaults to `0` so unit
+ * tests that construct {@link AcTrBatchedGroup} directly stay unchanged.
+ */
+export type AcTrDrawOrderZAllocator = () => number
+
+let activeDrawOrderZAllocator: AcTrDrawOrderZAllocator = () => 0
+
+/** Sets the process-wide draw-order Z allocator used when packing batches. */
+export function setAcTrDrawOrderZAllocator(
+  allocator: AcTrDrawOrderZAllocator
+): void {
+  activeDrawOrderZAllocator = allocator
+}
+
+/** Restores the no-op allocator (Z stays 0). */
+export function clearAcTrDrawOrderZAllocator(): void {
+  activeDrawOrderZAllocator = () => 0
+}
+
+/**
+ * Elevates linework-tier geometry so later entities occlude earlier ones.
+ * Hatch-tier fills (`drawOrder < 0`) keep Z unchanged so they stay under
+ * linework via `renderOrder` regardless of creation order.
+ */
+function applyDrawOrderZ(
+  worldOffset: THREE.Vector3,
+  material: THREE.Material
+): void {
+  const drawOrder = getMaterialMetadata(material).drawOrder ?? 0
+  if (drawOrder >= 0) {
+    worldOffset.z += activeDrawOrderZAllocator()
+  }
+}
 
 /**
  * Union of batch container classes resolved by {@link THREE.Object3D.getObjectById}
@@ -83,6 +135,9 @@ type AcTrOriginBatch =
   | AcTrBatchedLine2
   | AcTrBatchedMesh
   | AcTrBatchedPoint
+
+/** Packed batch or a shared block-template batch addressed by the same slot id. */
+type AcTrResolvedBatch = AcTrOriginBatch | AcTrSharedGeometryBatch
 
 /**
  * Material-keyed registry of batch containers that may be split by world origin.
@@ -122,6 +177,21 @@ export interface AcTrEntityInBatchedObject {
    */
   batchId: number
 }
+
+/**
+ * Batched-slot record stored per entity object id.
+ *
+ * A decomposed entity (for example an INSERT or multi-pass layer bucket) may
+ * occupy several slots. To save one `Array` wrapper per common single-slot
+ * entity, the map stores a bare {@link AcTrEntityInBatchedObject} while the
+ * entity owns exactly one slot, promotes to an array only from the second
+ * slot on, and uses `null` as a placeholder for a zero-slot entity that must
+ * still be counted by {@link AcTrBatchedGroup.entityCount}.
+ */
+type AcTrEntitySlotRecord =
+  | AcTrEntityInBatchedObject
+  | AcTrEntityInBatchedObject[]
+  | null
 
 /**
  * Options for {@link AcTrBatchedGroup.appendLineGeometry},
@@ -311,6 +381,14 @@ export class AcTrBatchedGroup extends THREE.Group {
    * miss containers after buffer growth or when overlay children share the tree.
    */
   private _originBatchById: Map<number, AcTrOriginBatch>
+  private _sharedBatchById: Map<number, AcTrSharedGeometryBatch>
+  /**
+   * Block-template geometries shared across INSERTs, keyed by
+   * `kind:sourceUuid:materialId`.
+   */
+  private _sharedGeometryBatches: Map<string, AcTrSharedGeometryBatch[]>
+  /** One clone per template geometry so cache disposal cannot free live buffers. */
+  private _ownedSharedGeometries: Map<string, THREE.BufferGeometry>
   /**
    * Top-most overlay of added/deleted/modified slots.
    *
@@ -330,7 +408,7 @@ export class AcTrBatchedGroup extends THREE.Group {
    * - The key is object id of the entity
    * - The value is the entity's position information in the batched objects
    */
-  private _entitiesMap: Map<string, AcTrEntityInBatchedObject[]>
+  private _entitiesMap: Map<string, AcTrEntitySlotRecord>
 
   /**
    * Creates an empty batched group with highlight and unbatched child containers.
@@ -346,6 +424,9 @@ export class AcTrBatchedGroup extends THREE.Group {
     this._meshWithIndexBatches = new Map()
     this._entitiesMap = new Map()
     this._originBatchById = new Map()
+    this._sharedBatchById = new Map()
+    this._sharedGeometryBatches = new Map()
+    this._ownedSharedGeometries = new Map()
     this._unbatchedEntities = new Map()
     this._unbatchedObjects = new THREE.Group()
     this._selectedObjects = markHighlightOverlayGroup(new THREE.Group())
@@ -446,16 +527,23 @@ export class AcTrBatchedGroup extends THREE.Group {
   }
 
   /**
-   * Rebuilds point-symbol batches for a new point display mode.
+   * Rebuilds point-symbol batches for a new point display mode and size.
+   *
+   * @param displayMode - `PDMODE` value.
+   * @param displaySize - `PDSIZE` value used to scale unit symbol templates.
    */
-  rerenderPoints(displayMode: number) {
+  rerenderPoints(displayMode: number, displaySize: number = 0) {
     const creator = AcTrPointSymbolCreator.instance
-    const pointSymbol = creator.create(displayMode)
+    const pointSymbol = creator.create(
+      displayMode,
+      { x: 0, y: 0, z: 0 },
+      displaySize
+    )
 
     if (pointSymbol.line) {
       this._pointSymbolBatches.forEach(batches => {
         batches.forEach(item => {
-          item.resetGeometry(displayMode)
+          item.resetGeometry(displayMode, displaySize)
         })
       })
     }
@@ -466,6 +554,58 @@ export class AcTrBatchedGroup extends THREE.Group {
         item.visible = isShowPoint
       })
     })
+  }
+
+  /**
+   * Collects world-space AABBs for point and point-symbol batch slots.
+   *
+   * Used after {@link rerenderPoints} so layouts can refresh spatial-index
+   * boxes when `PDMODE` / `PDSIZE` change marker size.
+   *
+   * @param out - Map of object id to world AABB; values are unioned when the
+   *   same id appears in multiple slots.
+   * @returns The same map instance passed in {@link out}.
+   */
+  collectPointObjectWorldBoxes(
+    out: Map<string, THREE.Box3> = new Map()
+  ): Map<string, THREE.Box3> {
+    const scratch = new THREE.Box3()
+
+    const absorbBatch = (
+      batch: AcTrBatchedLine | AcTrBatchedPoint
+    ) => {
+      batch.updateMatrixWorld(true)
+      for (let i = 0; i < batch.geometryCount; i++) {
+        let info: { objectId?: string; vertexCount: number }
+        try {
+          info = batch.getGeometryAt(i)
+        } catch {
+          continue
+        }
+        if (!info.objectId || info.vertexCount <= 0) {
+          continue
+        }
+        if (!batch.getBoundingBoxAt(i, scratch)) {
+          continue
+        }
+        scratch.applyMatrix4(batch.matrixWorld)
+        const existing = out.get(info.objectId)
+        if (existing) {
+          existing.union(scratch)
+        } else {
+          out.set(info.objectId, scratch.clone())
+        }
+      }
+    }
+
+    this._pointSymbolBatches.forEach(batches => {
+      batches.forEach(absorbBatch)
+    })
+    this._pointBatches.forEach(batches => {
+      batches.forEach(absorbBatch)
+    })
+
+    return out
   }
 
   /**
@@ -498,6 +638,11 @@ export class AcTrBatchedGroup extends THREE.Group {
     unionBatchMap(this._meshWithIndexBatches)
     unionBatchMap(this._pointBatches)
     unionBatchMap(this._pointSymbolBatches)
+    this._sharedGeometryBatches.forEach(batches => {
+      batches.forEach(batch =>
+        batch.unionActiveVisibleBoundingBoxInto(target, options)
+      )
+    })
 
     this._unbatchedEntities.forEach((objects, objectId) => {
       if (options?.excludeObjectIds?.has(objectId)) {
@@ -534,6 +679,13 @@ export class AcTrBatchedGroup extends THREE.Group {
     this.clearHighlightGroup(this._selectedObjects)
     this.clearHighlightGroup(this._hoverObjects)
     this.clearHighlightGroup(this._compareOverlay)
+    this._sharedGeometryBatches.forEach(batches => {
+      batches.forEach(batch => batch.disposeSharedInstances())
+    })
+    this._sharedGeometryBatches.clear()
+    this._sharedBatchById.clear()
+    this._ownedSharedGeometries.forEach(geometry => geometry.dispose())
+    this._ownedSharedGeometries.clear()
     this._originBatchById.clear()
     this._unbatchedObjects.children.forEach(object => {
       this.disposeObject(object)
@@ -558,7 +710,17 @@ export class AcTrBatchedGroup extends THREE.Group {
         continue
       }
       for (const batch of batches) {
-        batch.material = material
+        // Each batch keeps a private material clone so highlight-mask uniforms
+        // never leak across containers that share the same style cache entry.
+        batch.material = this.createOwnedBatchMaterial(material)
+        if (batch instanceof AcTrBatchedLine) {
+          // A layer rebind may swap a dash-capable material onto a batch whose
+          // packed geometry skipped the lineDistance attribute; arm it before
+          // the next draw so dashed linetypes render correctly.
+          batch.ensureLineDistanceAttribute()
+        } else if (batch instanceof AcTrBatchedLine2) {
+          batch.ensureDashDistances()
+        }
       }
       if (material.id !== oldId) {
         group.delete(oldId)
@@ -570,12 +732,22 @@ export class AcTrBatchedGroup extends THREE.Group {
         }
       }
     }
+    this.rebindSharedGeometryMaterial(oldId, material)
     this._unbatchedObjects.traverse(object => {
       if (!('material' in object)) return
       const drawableUserData = getSceneDrawableUserData(object)
       if (drawableUserData.styleMaterialId === oldId) {
-        object.material = material
+        const drawable = object as
+          | THREE.Mesh
+          | THREE.Line
+          | THREE.LineSegments
+        drawable.material = material
         drawableUserData.styleMaterialId = material.id
+        // Same arming as the batched path above: a cache-push rebind may swap
+        // a dash-capable material onto solid-authored unbatched geometry
+        // before syncAppearanceFromRecord's layer rebind runs (and that rebind
+        // early-returns when the material is already the new instance).
+        this.ensureUnbatchedLineDistance(drawable, material)
       }
     })
   }
@@ -715,11 +887,14 @@ export class AcTrBatchedGroup extends THREE.Group {
         }
 
         if (rebound === material) {
-          this.refreshLayerBoundMaterialColor(
-            material,
-            layerTraits,
-            styleManager
-          )
+          // Each batch owns a material clone; refresh color on every clone.
+          for (const batch of batches!) {
+            this.refreshLayerBoundMaterialColor(
+              batch.material as THREE.Material,
+              layerTraits,
+              styleManager
+            )
+          }
           continue
         }
 
@@ -773,16 +948,45 @@ export class AcTrBatchedGroup extends THREE.Group {
     if (Array.isArray(currentMaterial)) {
       drawable.material = currentMaterial.map(rebindSingle)
       syncStyleMaterialIdFromMaterials(drawableUserData, drawable.material)
+      this.ensureUnbatchedLineDistance(drawable, drawable.material)
       return
     }
 
     const rebound = rebindSingle(currentMaterial)
-    if (rebound === currentMaterial) {
+    if (rebound !== currentMaterial) {
+      drawable.material = rebound
+      syncStyleMaterialIdFromMaterials(drawableUserData, rebound)
+    }
+    // Always arm: updateMaterial may already have swapped the material to the
+    // dash-capable instance, in which case rebound === currentMaterial and the
+    // geometry still lacks lineDistance until we ensure it here.
+    this.ensureUnbatchedLineDistance(drawable, drawable.material)
+  }
+
+  /**
+   * Adds `lineDistance` to an unbatched line geometry when a rebind swapped a
+   * dash-capable pattern material onto geometry authored for a solid material.
+   */
+  private ensureUnbatchedLineDistance(
+    drawable: THREE.Mesh | THREE.Line | THREE.LineSegments,
+    material: THREE.Material | THREE.Material[]
+  ) {
+    // Duck-type across duplicate three.js copies (mtext-renderer vs app).
+    if (isThreeLineSegments(drawable)) {
+      AcTrBufferGeometryUtil.ensureLineDistance(drawable.geometry, material)
       return
     }
-
-    drawable.material = rebound
-    syncStyleMaterialIdFromMaterials(drawableUserData, rebound)
+    if (!isThreeLineSegments2(drawable)) {
+      return
+    }
+    const primary = Array.isArray(material) ? material[0] : material
+    if (
+      primary &&
+      (primary as { dashed?: boolean }).dashed === true &&
+      !drawable.geometry.getAttribute('instanceDistanceStart')
+    ) {
+      drawable.computeLineDistances()
+    }
   }
 
   /**
@@ -943,6 +1147,57 @@ export class AcTrBatchedGroup extends THREE.Group {
   }
 
   /**
+   * Visits every batched slot recorded for one entity id.
+   *
+   * Entries hold a bare item while the entity owns exactly one slot, so every
+   * reader must go through this helper instead of indexing the map value.
+   * Returning `true` from `visit` stops the walk.
+   *
+   * @param objectId - Entity object id.
+   * @param visit - Callback invoked once per batched slot.
+   */
+  private forEachEntitySlot(
+    objectId: string,
+    visit: (item: AcTrEntityInBatchedObject) => boolean | void
+  ) {
+    const record = this._entitiesMap.get(objectId)
+    if (record == null) {
+      return
+    }
+    if (!Array.isArray(record)) {
+      visit(record)
+      return
+    }
+    for (let index = 0, len = record.length; index < len; index++) {
+      if (visit(record[index]) === true) {
+        return
+      }
+    }
+  }
+
+  /**
+   * Records one batched slot for an entity id.
+   *
+   * The first slot of an entity is stored as a bare item and only promoted to
+   * an array from the second slot on, which saves one array per entity for the
+   * common single-slot case.
+   *
+   * @param objectId - Entity object id.
+   * @param item - Slot record produced by the batch container.
+   */
+  private appendEntitySlot(objectId: string, item: AcTrEntityInBatchedObject) {
+    const record = this._entitiesMap.get(objectId)
+    if (record == null) {
+      // Missing entry, or the `null` placeholder for a zero-slot entity.
+      this._entitiesMap.set(objectId, item)
+    } else if (Array.isArray(record)) {
+      record.push(item)
+    } else {
+      this._entitiesMap.set(objectId, [record, item])
+    }
+  }
+
+  /**
    * Updates visibility for one entity without removing it from batch containers.
    *
    * @param objectId - Entity object id.
@@ -950,13 +1205,13 @@ export class AcTrBatchedGroup extends THREE.Group {
    * @returns `true` when the entity exists in this group.
    */
   setEntityVisible(objectId: string, visible: boolean) {
-    const entityInfo = this._entitiesMap.get(objectId)
     const unbatchedObjects = this._unbatchedEntities.get(objectId)
-    if (!entityInfo && !unbatchedObjects) {
+    const hasBatched = this._entitiesMap.has(objectId)
+    if (!hasBatched && !unbatchedObjects) {
       return false
     }
 
-    entityInfo?.forEach(item => {
+    this.forEachEntitySlot(objectId, item => {
       const batchedObject = this.getOriginBatch(item.batchedObjectId)
       batchedObject?.setVisibleAt(item.batchId, visible)
     })
@@ -978,16 +1233,29 @@ export class AcTrBatchedGroup extends THREE.Group {
    * the entity is not present in this group.
    */
   getEntityVisible(objectId: string): boolean | undefined {
-    const entityInfo = this._entitiesMap.get(objectId)
     const unbatchedObjects = this._unbatchedEntities.get(objectId)
-    if (!entityInfo && !unbatchedObjects) {
+    const hasBatched = this._entitiesMap.has(objectId)
+    if (!hasBatched && !unbatchedObjects) {
       return undefined
     }
 
     let visible: boolean | undefined
+    let slotCount = 0
 
-    if (entityInfo && entityInfo.length > 0) {
-      visible = entityInfo.every(item => this.getBatchItemVisible(item))
+    if (hasBatched) {
+      let allSlotsVisible = true
+      this.forEachEntitySlot(objectId, item => {
+        slotCount++
+        if (!this.getBatchItemVisible(item)) {
+          allSlotsVisible = false
+          // Stop at the first hidden slot, mirroring the old `every()`.
+          return true
+        }
+        return false
+      })
+      if (slotCount > 0) {
+        visible = allSlotsVisible
+      }
     }
 
     if (unbatchedObjects && unbatchedObjects.length > 0) {
@@ -1014,11 +1282,12 @@ export class AcTrBatchedGroup extends THREE.Group {
     // One logical entity (same objectId) can be appended in multiple passes
     // (e.g. INSERT decomposition by source layer and inherited layer-0 bucket).
     // Keep accumulating geometry mappings instead of overwriting previous ones.
-    let entityInfo = this._entitiesMap.get(objectId)
-    if (!entityInfo) {
-      entityInfo = []
-      this._entitiesMap.set(objectId, entityInfo)
-    }
+    //
+    // Collect slots locally and then feed them through appendEntitySlot, which
+    // promotes the map entry from a bare item to an array only when a second
+    // slot lands. Zero-slot entities get a `null` placeholder so entityCount
+    // stays correct.
+    const appendedSlots: AcTrEntityInBatchedObject[] = []
 
     const existingUnbatched = this._unbatchedEntities.get(objectId)
     const unbatchedObjects: THREE.Object3D[] = existingUnbatched ?? []
@@ -1038,6 +1307,27 @@ export class AcTrBatchedGroup extends THREE.Group {
       if (drawableUserData.noBatch) {
         const cloned = this.cloneUnbatchedObject(object)
         cloned.visible = entityVisible && object.visible
+        // Elevate later unbatched linework so wipeouts can occlude it.
+        // Hatch-tier unbatched meshes keep Z=0 (under linework via renderOrder).
+        const material = (cloned as THREE.Mesh).material as
+          | THREE.Material
+          | THREE.Material[]
+          | undefined
+        const firstMaterial = Array.isArray(material) ? material[0] : material
+        if (
+          firstMaterial &&
+          (getMaterialMetadata(firstMaterial).drawOrder ?? 0) >= 0
+        ) {
+          // cloneUnbatchedObject stores the source matrixWorld directly.
+          // updateMatrix() recomposes from TRS and drops that transform, so
+          // OLE/raster images inside a scaled INSERT draw at block-local
+          // coordinates (a wide smear beside the drawing).
+          const drawOrderZ = activeDrawOrderZAllocator()
+          if (drawOrderZ !== 0) {
+            cloned.matrix.elements[14] += drawOrderZ
+            cloned.matrixWorld.elements[14] += drawOrderZ
+          }
+        }
         getSceneDrawableUserData(cloned).bboxIntersectionCheck =
           bboxIntersectionCheck
         this._unbatchedObjects.add(cloned)
@@ -1046,29 +1336,43 @@ export class AcTrBatchedGroup extends THREE.Group {
         return
       }
 
-      if (object instanceof LineSegments2) {
+      const sharedSlot = this.tryAddSharedDrawable(
+        object,
+        objectId,
+        bboxIntersectionCheck
+      )
+      if (sharedSlot) {
+        appendedSlots.push(sharedSlot)
+        this.applyBatchSlotVisibility(
+          sharedSlot,
+          entityVisible && object.visible
+        )
+        // The leaf itself is instanced, but complex linetypes and nested
+        // block geometry hang off it as children and still need their own slots.
+      } else if (isThreeLineSegments2(object)) {
+        // Duck-type across duplicate three.js copies (mtext-renderer vs app).
+        // `instanceof` silently drops glyph LineSegments/Meshes — see
+        // AcTrThreeObjectGuards.
         const item = this.addLine2(object, {
           objectId,
           bboxIntersectionCheck: bboxIntersectionCheck
         })
         if (item) {
-          entityInfo.push(item)
+          appendedSlots.push(item)
           this.applyBatchSlotVisibility(item, entityVisible && object.visible)
         }
         return
-      }
-
-      if (object instanceof THREE.LineSegments) {
+      } else if (isThreeLineSegments(object)) {
         const item = this.addLine(object, {
           position: drawableUserData.position,
           objectId,
           bboxIntersectionCheck: bboxIntersectionCheck
         })
         if (item) {
-          entityInfo.push(item)
+          appendedSlots.push(item)
           this.applyBatchSlotVisibility(item, entityVisible && object.visible)
         }
-      } else if (object instanceof THREE.Mesh) {
+      } else if (isThreeMesh(object)) {
         const item = this.addMesh(
           object,
           {
@@ -1078,16 +1382,16 @@ export class AcTrBatchedGroup extends THREE.Group {
           styleManager
         )
         if (item) {
-          entityInfo.push(item)
+          appendedSlots.push(item)
           this.applyBatchSlotVisibility(item, entityVisible && object.visible)
         }
-      } else if (object instanceof THREE.Points) {
+      } else if (isThreePoints(object)) {
         const item = this.addPoint(object, {
           objectId,
           bboxIntersectionCheck: bboxIntersectionCheck
         })
         if (item) {
-          entityInfo.push(item)
+          appendedSlots.push(item)
           this.applyBatchSlotVisibility(item, entityVisible && object.visible)
         }
       }
@@ -1097,6 +1401,18 @@ export class AcTrBatchedGroup extends THREE.Group {
       }
     }
     visitDrawable(entity)
+
+    if (appendedSlots.length === 0) {
+      // Keep the entity registered (and counted) even when every drawable went
+      // to the unbatched group or was skipped as hidden.
+      if (!this._entitiesMap.has(objectId)) {
+        this._entitiesMap.set(objectId, null)
+      }
+    } else {
+      for (let index = 0; index < appendedSlots.length; index++) {
+        this.appendEntitySlot(objectId, appendedSlots[index])
+      }
+    }
 
     if (hasUnbatched) {
       this._unbatchedEntities.set(objectId, unbatchedObjects)
@@ -1141,6 +1457,8 @@ export class AcTrBatchedGroup extends THREE.Group {
       return false
     }
 
+    applyDrawOrderZ(worldOffset, material)
+
     const hasIndex = geometry.getIndex() !== null
     const batches = hasIndex ? this._lineWithIndexBatches : this._lineBatches
     const batchedLine = this.resolveOriginBatch(
@@ -1151,7 +1469,7 @@ export class AcTrBatchedGroup extends THREE.Group {
         new AcTrBatchedLine(
           AcTrBatchedGroup.INITIAL_LINE_VERTEX_CAPACITY,
           AcTrBatchedGroup.INITIAL_LINE_INDEX_CAPACITY,
-          material
+          this.createOwnedBatchMaterial(material)
         )
     )
 
@@ -1189,6 +1507,8 @@ export class AcTrBatchedGroup extends THREE.Group {
       return false
     }
 
+    applyDrawOrderZ(worldOffset, material)
+
     const batchedLine = this.resolveOriginBatch(
       this._line2Batches,
       material.id,
@@ -1196,7 +1516,7 @@ export class AcTrBatchedGroup extends THREE.Group {
       () =>
         new AcTrBatchedLine2(
           AcTrBatchedGroup.INITIAL_LINE_VERTEX_CAPACITY,
-          material
+          this.createOwnedBatchMaterial(material)
         )
     )
 
@@ -1229,6 +1549,8 @@ export class AcTrBatchedGroup extends THREE.Group {
       return false
     }
 
+    applyDrawOrderZ(worldOffset, material)
+
     const batchedPoint = this.resolveOriginBatch(
       this._pointBatches,
       material.id,
@@ -1236,7 +1558,7 @@ export class AcTrBatchedGroup extends THREE.Group {
       () =>
         new AcTrBatchedPoint(
           AcTrBatchedGroup.INITIAL_POINT_VERTEX_CAPACITY,
-          material
+          this.createOwnedBatchMaterial(material)
         )
     )
 
@@ -1272,6 +1594,8 @@ export class AcTrBatchedGroup extends THREE.Group {
       return false
     }
 
+    applyDrawOrderZ(worldOffset, material)
+
     const hasIndex = geometry.getIndex() !== null
     const batches = hasIndex ? this._meshWithIndexBatches : this._meshBatches
     const batchedMesh = this.resolveOriginBatch(
@@ -1284,7 +1608,7 @@ export class AcTrBatchedGroup extends THREE.Group {
         const batch = new AcTrBatchedMesh(
           AcTrBatchedGroup.INITIAL_MESH_VERTEX_CAPACITY,
           AcTrBatchedGroup.INITIAL_MESH_INDEX_CAPACITY,
-          material
+          this.createOwnedBatchMaterial(material)
         )
         batch.renderOrder = drawOrder
         return batch
@@ -1311,12 +1635,7 @@ export class AcTrBatchedGroup extends THREE.Group {
     visible: boolean
   ) {
     objectId = String(objectId)
-    let entityInfo = this._entitiesMap.get(objectId)
-    if (!entityInfo) {
-      entityInfo = []
-      this._entitiesMap.set(objectId, entityInfo)
-    }
-    entityInfo.push(item)
+    this.appendEntitySlot(objectId, item)
     this.applyBatchSlotVisibility(item, visible)
     this.syncCompareRoleForEntity(objectId)
   }
@@ -1327,18 +1646,16 @@ export class AcTrBatchedGroup extends THREE.Group {
   removeEntity(objectId: string) {
     let result = false
     let compactedBatches = false
-    const entityInfo = this._entitiesMap.get(objectId)
-    if (entityInfo) {
-      const batchedObjects = new Map<number, AcTrOriginBatch>()
-      for (let index = 0, len = entityInfo.length; index < len; index++) {
-        const item = entityInfo[index]
+    if (this._entitiesMap.has(objectId)) {
+      const batchedObjects = new Map<number, AcTrResolvedBatch>()
+      this.forEachEntitySlot(objectId, item => {
         const batchedObject = this.getOriginBatch(item.batchedObjectId)
         if (batchedObject) {
           batchedObject.deleteGeometry(item.batchId)
           batchedObjects.set(item.batchedObjectId, batchedObject)
           result = true
         }
-      }
+      })
       batchedObjects.forEach(batchedObject => batchedObject.optimize())
       compactedBatches = batchedObjects.size > 0
       this.unselect(objectId)
@@ -1374,18 +1691,21 @@ export class AcTrBatchedGroup extends THREE.Group {
    * @param raycaster Input raycaster to check intersection
    */
   isIntersectWith(objectId: string, raycaster: THREE.Raycaster) {
-    const result = false
-    const entityInfo = this._entitiesMap.get(objectId)
-    if (entityInfo) {
-      const intersects: THREE.Intersection[] = []
-      for (let index = 0, len = entityInfo.length; index < len; index++) {
-        const item = entityInfo[index]
-        const batchedObject = this.getOriginBatch(item.batchedObjectId)
-        if (batchedObject) {
-          batchedObject.intersectWith(item.batchId, raycaster, intersects)
-          if (intersects.length > 0) return true
+    const intersects: THREE.Intersection[] = []
+    let hit = false
+    this.forEachEntitySlot(objectId, item => {
+      const batchedObject = this.getOriginBatch(item.batchedObjectId)
+      if (batchedObject) {
+        batchedObject.intersectWith(item.batchId, raycaster, intersects)
+        if (intersects.length > 0) {
+          hit = true
+          return true
         }
       }
+      return false
+    })
+    if (hit) {
+      return true
     }
     const unbatchedObjects = this._unbatchedEntities.get(objectId)
     if (unbatchedObjects) {
@@ -1397,7 +1717,7 @@ export class AcTrBatchedGroup extends THREE.Group {
         }
       }
     }
-    return result
+    return false
   }
 
   /**
@@ -1594,9 +1914,8 @@ export class AcTrBatchedGroup extends THREE.Group {
     objectId: string,
     role: AcTrBatchCompareRole | null
   ) {
-    const entityInfo = this._entitiesMap.get(objectId)
-    const dirtyBatches = new Set<AcTrOriginBatch>()
-    entityInfo?.forEach(item => {
+    const dirtyBatches = new Set<AcTrResolvedBatch>()
+    this.forEachEntitySlot(objectId, item => {
       const batchedObject = this.getOriginBatch(item.batchedObjectId)
       if (batchedObject?.setCompareRoleAt(item.batchId, role)) {
         dirtyBatches.add(batchedObject)
@@ -1744,10 +2063,9 @@ export class AcTrBatchedGroup extends THREE.Group {
       return
     }
 
-    const dirtyBatches = new Set<AcTrOriginBatch>()
+    const dirtyBatches = new Set<AcTrResolvedBatch>()
     for (const objectId of objectIds) {
-      const entityInfo = this._entitiesMap.get(objectId)
-      entityInfo?.forEach(item => {
+      this.forEachEntitySlot(objectId, item => {
         const batchedObject = this.getOriginBatch(item.batchedObjectId)
         if (
           batchedObject &&
@@ -2020,14 +2338,14 @@ export class AcTrBatchedGroup extends THREE.Group {
       }
       this.applyPreviewMaterial(object, options.previewStyle ?? 'normal')
     }
-    const entityInfo = this._entitiesMap.get(objectId)
-    if (entityInfo && added < options.maxSlots) {
-      const limit = Math.min(entityInfo.length, options.maxSlots)
-      for (let index = 0; index < limit; index++) {
-        const item = entityInfo[index]
+    if (added < options.maxSlots) {
+      this.forEachEntitySlot(objectId, item => {
+        if (added >= options.maxSlots) {
+          return true
+        }
         const batchedObject = this.getOriginBatch(item.batchedObjectId)
         if (!batchedObject || !this.hasBatchObjectAt(batchedObject)) {
-          continue
+          return false
         }
 
         const object = batchedObject.getObjectAt(item.batchId)
@@ -2043,7 +2361,8 @@ export class AcTrBatchedGroup extends THREE.Group {
         object.renderOrder = containerGroup.renderOrder
         containerGroup.add(object)
         added++
-      }
+        return false
+      })
     }
 
     const unbatchedObjects = this._unbatchedEntities.get(objectId)
@@ -2073,8 +2392,8 @@ export class AcTrBatchedGroup extends THREE.Group {
    * @param batchedObject - Batch container candidate for drawable extraction
    */
   private hasBatchObjectAt(
-    batchedObject: AcTrOriginBatch
-  ): batchedObject is AcTrOriginBatch & {
+    batchedObject: AcTrOriginBatch | AcTrSharedGeometryBatch
+  ): batchedObject is (AcTrOriginBatch | AcTrSharedGeometryBatch) & {
     getObjectAt(batchId: number): THREE.Object3D
   } {
     return typeof batchedObject.getObjectAt === 'function'
@@ -2186,7 +2505,11 @@ export class AcTrBatchedGroup extends THREE.Group {
       }
       const batch = this.getOriginBatch(data.batchedObjectId)
       const childGeometry = this.getDrawableGeometry(child)
-      if (batch == null || childGeometry == null) {
+      if (
+        batch == null ||
+        childGeometry == null ||
+        batch instanceof AcTrSharedGeometryBatch
+      ) {
         continue
       }
       if (childGeometry.attributes !== batch.geometry.attributes) {
@@ -2247,7 +2570,10 @@ export class AcTrBatchedGroup extends THREE.Group {
    * Resolves a packed batch container by its Three.js object id.
    */
   private getOriginBatch(batchedObjectId: number) {
-    return this._originBatchById.get(batchedObjectId)
+    return (
+      this._originBatchById.get(batchedObjectId) ??
+      this._sharedBatchById.get(batchedObjectId)
+    )
   }
 
   /**
@@ -2283,6 +2609,167 @@ export class AcTrBatchedGroup extends THREE.Group {
   }
 
   /**
+   * Places a block-template leaf into a shared-geometry batch.
+   *
+   * Returns null when the leaf is not a shared template, when a mirrored mesh
+   * must be baked so face winding can flip, or when a dashed linetype is
+   * scaled and must be baked so dash length stays in world units.
+   *
+   * @param object - Drawable leaf produced by an INSERT clone.
+   * @param objectId - Database id of the owning INSERT.
+   * @param bboxIntersectionCheck - Ray-test against bounds instead of segments.
+   * @returns The new slot, or null to fall through to vertex packing.
+   */
+  private tryAddSharedDrawable(
+    object: THREE.Object3D,
+    objectId: string,
+    bboxIntersectionCheck: boolean
+  ): AcTrEntityInBatchedObject | null {
+    const drawableUserData = getSceneDrawableUserData(object)
+    if (drawableUserData.sharesTemplateGeometry !== true) return null
+    if (!this.hasGeometry(object) || !this.hasMaterial(object)) return null
+    const material = object.material
+    if (Array.isArray(material)) return null
+    const kind = this.sharedGeometryKind(object)
+    if (!kind) return null
+    const geometry = object.geometry
+    if (!geometry.getAttribute('position')?.count) return null
+
+    object.updateWorldMatrix(true, false)
+    if (this.mustBakeSharedDrawable(object, kind, geometry)) return null
+
+    const matrixWorld = object.matrixWorld.clone()
+    if ((getMaterialMetadata(material).drawOrder ?? 0) >= 0) {
+      matrixWorld.elements[14] += activeDrawOrderZAllocator()
+    }
+    const translation = new THREE.Vector3().setFromMatrixPosition(matrixWorld)
+    const batch = this.resolveSharedGeometryBatch(
+      geometry,
+      material,
+      kind,
+      translation
+    )
+    const batchId = batch.addInstance(matrixWorld, objectId, bboxIntersectionCheck)
+    return { batchedObjectId: batch.id, batchId }
+  }
+
+  /**
+   * Leaves that cannot share one GPU instance buffer.
+   *
+   * Mirrored meshes reverse triangle winding. Instancing keeps {@link THREE.FrontSide}
+   * and the fill disappears; the vertex-batch path swaps in the back-side material.
+   * Dash lengths live in geometry space, so a scaled INSERT must be baked or the
+   * pattern stretches with the block.
+   *
+   * @param object - Drawable whose world matrix is current.
+   * @param kind - Primitive family selected for this leaf.
+   * @param geometry - Template geometry, possibly carrying dash distances.
+   * @returns `true` when the caller should fall through to vertex packing.
+   */
+  private mustBakeSharedDrawable(
+    object: THREE.Object3D,
+    kind: AcTrSharedGeometryKind,
+    geometry: THREE.BufferGeometry
+  ) {
+    const material = (object as THREE.Mesh).material
+    if (Array.isArray(material)) return true
+    if (kind === 'mesh' && object.matrixWorld.determinant() < 0) return true
+    const dashed =
+      kind === 'line2'
+        ? (material as LineMaterial).dashed === true
+        : geometry.getAttribute('lineDistance') != null
+    if (!dashed) return false
+    const scale = uniformColumnScale(object.matrixWorld)
+    return scale == null || Math.abs(scale - 1) > 1e-4
+  }
+
+  private sharedGeometryKind(
+    object: THREE.Object3D
+  ): AcTrSharedGeometryKind | null {
+    if (isThreeLineSegments2(object)) return 'line2'
+    if (isThreeLineSegments(object)) return 'line'
+    if (isThreeMesh(object)) return 'mesh'
+    if (isThreePoints(object)) return 'points'
+    return null
+  }
+
+  private resolveSharedGeometryBatch(
+    geometry: THREE.BufferGeometry,
+    material: THREE.Material,
+    kind: AcTrSharedGeometryKind,
+    worldOffset: THREE.Vector3
+  ) {
+    const key = `${kind}:${geometry.uuid}:${material.id}`
+    let list = this._sharedGeometryBatches.get(key)
+    if (!list) {
+      list = []
+      this._sharedGeometryBatches.set(key, list)
+    }
+    let best: AcTrSharedGeometryBatch | undefined
+    let bestDistance = Infinity
+    for (const batch of list) {
+      if (!canMergeIntoBatchOrigin(batch.origin, worldOffset)) continue
+      const distance = batchOriginOffsetDistance(batch.origin, worldOffset)
+      if (distance < bestDistance) {
+        bestDistance = distance
+        best = batch
+      }
+    }
+    if (best) return best
+
+    let owned = this._ownedSharedGeometries.get(geometry.uuid)
+    if (!owned) {
+      owned = geometry.clone()
+      this._ownedSharedGeometries.set(geometry.uuid, owned)
+    }
+    const batch = new AcTrSharedGeometryBatch(
+      owned,
+      material,
+      worldOffset,
+      kind,
+      geometry.uuid
+    )
+    list.push(batch)
+    this._sharedBatchById.set(batch.id, batch)
+    this.add(batch)
+    return batch
+  }
+
+  /**
+   * Points a shared-geometry batch at a replacement layer material.
+   *
+   * @param oldId - Material id currently referenced by shared batches.
+   * @param material - Replacement material from the style cache.
+   */
+  private rebindSharedGeometryMaterial(
+    oldId: number,
+    material: THREE.Material
+  ) {
+    const moved: AcTrSharedGeometryBatch[] = []
+    for (const [key, batches] of this._sharedGeometryBatches) {
+      const kept: AcTrSharedGeometryBatch[] = []
+      for (const batch of batches) {
+        if (batch.materialId !== oldId) {
+          kept.push(batch)
+          continue
+        }
+        batch.material = material
+        moved.push(batch)
+      }
+      if (kept.length === 0) this._sharedGeometryBatches.delete(key)
+      else if (kept.length !== batches.length) {
+        this._sharedGeometryBatches.set(key, kept)
+      }
+    }
+    for (const batch of moved) {
+      const key = `${batch.kind}:${batch.sourceUuid}:${material.id}`
+      const list = this._sharedGeometryBatches.get(key)
+      if (list) list.push(batch)
+      else this._sharedGeometryBatches.set(key, [batch])
+    }
+  }
+
+  /**
    * Adds one `THREE.LineSegments` object into matching line batch.
    */
   private addLine(
@@ -2294,6 +2781,7 @@ export class AcTrBatchedGroup extends THREE.Group {
     const worldOffset = new THREE.Vector3().setFromMatrixPosition(
       object.matrixWorld
     )
+    applyDrawOrderZ(worldOffset, material)
     const batchedLine = this.resolveOriginBatch(
       batches,
       material.id,
@@ -2302,7 +2790,7 @@ export class AcTrBatchedGroup extends THREE.Group {
         new AcTrBatchedLine(
           AcTrBatchedGroup.INITIAL_LINE_VERTEX_CAPACITY,
           AcTrBatchedGroup.INITIAL_LINE_INDEX_CAPACITY,
-          material
+          this.createOwnedBatchMaterial(material)
         )
     )
 
@@ -2341,6 +2829,7 @@ export class AcTrBatchedGroup extends THREE.Group {
     const worldOffset = new THREE.Vector3().setFromMatrixPosition(
       object.matrixWorld
     )
+    applyDrawOrderZ(worldOffset, material)
     const batchedLine = this.resolveOriginBatch(
       this._line2Batches,
       material.id,
@@ -2348,7 +2837,7 @@ export class AcTrBatchedGroup extends THREE.Group {
       () =>
         new AcTrBatchedLine2(
           AcTrBatchedGroup.INITIAL_LINE_VERTEX_CAPACITY,
-          material
+          this.createOwnedBatchMaterial(material)
         )
     )
 
@@ -2407,6 +2896,7 @@ export class AcTrBatchedGroup extends THREE.Group {
     const worldOffset = new THREE.Vector3().setFromMatrixPosition(
       object.matrixWorld
     )
+    applyDrawOrderZ(worldOffset, material)
     const batchedMesh = this.resolveOriginBatch(
       batches,
       material.id,
@@ -2417,7 +2907,7 @@ export class AcTrBatchedGroup extends THREE.Group {
         const batch = new AcTrBatchedMesh(
           AcTrBatchedGroup.INITIAL_MESH_VERTEX_CAPACITY,
           AcTrBatchedGroup.INITIAL_MESH_INDEX_CAPACITY,
-          material
+          this.createOwnedBatchMaterial(material)
         )
         // All CAD geometry lives on the same Z plane, so depth test alone
         // cannot decide which primitive wins on a shared pixel. Use the
@@ -2459,6 +2949,7 @@ export class AcTrBatchedGroup extends THREE.Group {
     const worldOffset = new THREE.Vector3().setFromMatrixPosition(
       object.matrixWorld
     )
+    applyDrawOrderZ(worldOffset, material)
     const batchedPoint = this.resolveOriginBatch(
       this._pointBatches,
       material.id,
@@ -2466,7 +2957,7 @@ export class AcTrBatchedGroup extends THREE.Group {
       () => {
         const batch = new AcTrBatchedPoint(
           AcTrBatchedGroup.INITIAL_POINT_VERTEX_CAPACITY,
-          material
+          this.createOwnedBatchMaterial(material)
         )
         batch.visible = object.visible
         return batch
@@ -2531,6 +3022,7 @@ export class AcTrBatchedGroup extends THREE.Group {
     }
 
     if (best) {
+      this.ensureBatchHighlightRenderer(best)
       return best
     }
 
@@ -2547,7 +3039,127 @@ export class AcTrBatchedGroup extends THREE.Group {
     list.push(batch)
     this._originBatchById.set(batch.id, batch)
     this.add(batch)
+    this.ensureBatchHighlightRenderer(batch)
     return batch
+  }
+
+  /**
+   * Applies ACI-7 / foreground colour to every owned batch material clone.
+   *
+   * Style-manager cache entries are updated by {@link AcTrMaterialManager.changeForeground};
+   * batch containers keep private clones so they must be repainted separately.
+   *
+   * @param color - Resolved foreground colour for the current canvas background.
+   */
+  repaintForegroundMaterials(color: number) {
+    const threeColor = new THREE.Color(color)
+    const paint = (material: THREE.Material) => {
+      if (getMaterialMetadata(material).isForeground === true) {
+        AcTrMaterialUtil.setMaterialColor(material, threeColor)
+      }
+    }
+
+    for (const group of this.groups) {
+      group.forEach(batches => {
+        batches.forEach(batch => {
+          const material = batch.material
+          if (Array.isArray(material)) {
+            material.forEach(paint)
+          } else if (material) {
+            paint(material)
+          }
+        })
+      })
+    }
+
+    this._unbatchedObjects.traverse(object => {
+      if (!('material' in object)) {
+        return
+      }
+      const material = (
+        object as THREE.Mesh | THREE.Line | THREE.LineSegments | THREE.Points
+      ).material
+      if (Array.isArray(material)) {
+        material.forEach(paint)
+      } else if (material) {
+        paint(material)
+      }
+    })
+  }
+
+  /**
+   * Applies canvas-background colour to every owned batch material clone
+   * marked as {@link getMaterialMetadata}'s `isBackgroundFill` (wipeouts).
+   *
+   * Style-manager cache entries are updated by
+   * {@link AcTrMaterialManager.changeBackground}; batch containers keep
+   * private clones so they must be repainted separately.
+   *
+   * @param color - Current canvas background colour.
+   */
+  repaintBackgroundMaterials(color: number) {
+    const threeColor = new THREE.Color(color)
+    const paint = (material: THREE.Material) => {
+      if (getMaterialMetadata(material).isBackgroundFill === true) {
+        AcTrMaterialUtil.setMaterialColor(material, threeColor)
+      }
+    }
+
+    for (const group of this.groups) {
+      group.forEach(batches => {
+        batches.forEach(batch => {
+          const material = batch.material
+          if (Array.isArray(material)) {
+            material.forEach(paint)
+          } else if (material) {
+            paint(material)
+          }
+        })
+      })
+    }
+
+    this._unbatchedObjects.traverse(object => {
+      if (!('material' in object)) {
+        return
+      }
+      const material = (
+        object as THREE.Mesh | THREE.Line | THREE.LineSegments | THREE.Points
+      ).material
+      if (Array.isArray(material)) {
+        material.forEach(paint)
+      } else if (material) {
+        paint(material)
+      }
+    })
+  }
+
+  /**
+   * Clones a style-cached material for exclusive use by one batch container.
+   *
+   * Batches are still grouped by the source `material.id`, but each container
+   * must own a distinct `THREE.Material` instance. Highlight mask uniforms are
+   * stored on the material; sharing one instance across point-symbol and line
+   * batches lets a selected slot tint the same slot index in sibling batches.
+   */
+  private createOwnedBatchMaterial(source: THREE.Material): THREE.Material {
+    const owned = AcTrMaterialUtil.cloneMaterial(source) as THREE.Material
+    setMaterialMetadata(owned, { ...getMaterialMetadata(source) })
+    return owned
+  }
+
+  /**
+   * Ensures the batch rebinds its own highlight mask before every draw.
+   *
+   * Required when multiple batches share one style-cached material; otherwise
+   * a selected sibling's mask stays bound and other batches' slot 0 tint.
+   */
+  private ensureBatchHighlightRenderer(batch: AcTrOriginBatch) {
+    const state = (
+      batch as AcTrOriginBatch & { _highlightState?: AcTrBatchHighlightState }
+    )._highlightState
+    if (state) {
+      installBatchHighlightRenderer(batch, state)
+    }
   }
 
   /**
@@ -2698,21 +3310,30 @@ export class AcTrBatchedGroup extends THREE.Group {
     }
 
     const cloned = source.clone() as THREE.Object3D
-    source.updateMatrixWorld(true)
-    source.matrixWorld.decompose(_v1, _unbatchedQuaternion, _unbatchedScale)
-    cloned.position.copy(_v1)
-    cloned.quaternion.copy(_unbatchedQuaternion)
-    cloned.scale.copy(_unbatchedScale)
+    this.copyWorldMatrixOntoClone(source, cloned)
     if (this.hasMaterial(source) && this.hasMaterial(cloned)) {
-      cloned.material = source.material
+      const sourceMaterial = source.material
+      // Textured leaves (AcTrImage) must own cloned geometry/material/map:
+      // AcTrView2d disposes the convert-time entity right after addEntity, and
+      // sharing those resources leaves a blank mesh in the scene.
+      const ownsTexturedMaterial = this.materialHasTextureMap(sourceMaterial)
+      if (ownsTexturedMaterial) {
+        cloned.material = this.cloneUnbatchedTexturedMaterial(sourceMaterial)
+        if (this.hasGeometry(source) && this.hasGeometry(cloned)) {
+          cloned.geometry = source.geometry.clone()
+        }
+      } else {
+        cloned.material = sourceMaterial
+      }
       const sourceDrawable = getSceneDrawableUserData(source)
       const clonedDrawable = getSceneDrawableUserData(cloned)
       clonedDrawable.styleMaterialId =
         sourceDrawable.styleMaterialId ?? this.getMaterialId(source.material)
       clonedDrawable.bboxIntersectionCheck =
         sourceDrawable.bboxIntersectionCheck
-      clonedDrawable.sharesTemplateGeometry =
-        sourceDrawable.sharesTemplateGeometry
+      clonedDrawable.sharesTemplateGeometry = ownsTexturedMaterial
+        ? false
+        : sourceDrawable.sharesTemplateGeometry
       clonedDrawable.bakedWorldMatrix = source.matrixWorld.toArray()
       if (sourceDrawable.textEntityTraits) {
         clonedDrawable.textEntityTraits = AcTrMTextColorUtil.cloneEntityTraits(
@@ -2720,9 +3341,41 @@ export class AcTrBatchedGroup extends THREE.Group {
         )
       }
     }
-    cloned.updateMatrix()
-    cloned.updateMatrixWorld(true)
     this.finalizeUnbatchedLineClone(cloned)
+    return cloned
+  }
+
+  /**
+   * True when a material (or any entry in a material array) carries a color map.
+   */
+  private materialHasTextureMap(
+    material: THREE.Material | THREE.Material[]
+  ): boolean {
+    if (Array.isArray(material)) {
+      return material.some(item => this.materialHasTextureMap(item))
+    }
+    return !!(material as THREE.MeshBasicMaterial).map
+  }
+
+  /**
+   * Deep-clones a textured material so convert-time {@link AcTrEntity.dispose}
+   * cannot free the map still referenced by the scene's unbatched copy.
+   */
+  private cloneUnbatchedTexturedMaterial(
+    material: THREE.Material | THREE.Material[]
+  ): THREE.Material | THREE.Material[] {
+    if (Array.isArray(material)) {
+      return material.map(item =>
+        this.cloneUnbatchedTexturedMaterial(item)
+      ) as THREE.Material[]
+    }
+    const cloned = material.clone()
+    const sourceMap = (material as THREE.MeshBasicMaterial).map
+    if (sourceMap) {
+      const mapClone = sourceMap.clone()
+      mapClone.needsUpdate = true
+      ;(cloned as THREE.MeshBasicMaterial).map = mapClone
+    }
     return cloned
   }
 
@@ -2777,13 +3430,7 @@ export class AcTrBatchedGroup extends THREE.Group {
    */
   private cloneUnbatchedSubtree(source: THREE.Object3D) {
     const cloned = source.clone(true) as THREE.Object3D
-    source.updateMatrixWorld(true)
-    source.matrixWorld.decompose(_v1, _unbatchedQuaternion, _unbatchedScale)
-    cloned.position.copy(_v1)
-    cloned.quaternion.copy(_unbatchedQuaternion)
-    cloned.scale.copy(_unbatchedScale)
-    cloned.updateMatrix()
-    cloned.updateMatrixWorld(true)
+    this.copyWorldMatrixOntoClone(source, cloned)
 
     const sourceDrawable = getSceneDrawableUserData(source)
     const clonedDrawable = getSceneDrawableUserData(cloned)
@@ -2808,6 +3455,26 @@ export class AcTrBatchedGroup extends THREE.Group {
     })
 
     return cloned
+  }
+
+  /**
+   * Places an unbatched clone in world space using the source's exact
+   * {@link THREE.Object3D.matrixWorld}.
+   *
+   * Avoids {@link THREE.Matrix4.decompose}: mirrored INSERT scales produce
+   * negative determinants that do not round-trip through TRS, which previously
+   * shoved attribute text (e.g. DOOR_FIRE_TEXT) tens of millions of units away
+   * and blew up zoom-to-extents / layer-fit boxes.
+   */
+  private copyWorldMatrixOntoClone(
+    source: THREE.Object3D,
+    cloned: THREE.Object3D
+  ) {
+    source.updateMatrixWorld(true)
+    cloned.matrixAutoUpdate = false
+    cloned.matrix.copy(source.matrixWorld)
+    cloned.matrixWorld.copy(source.matrixWorld)
+    cloned.matrixWorldNeedsUpdate = false
   }
 
   /**
@@ -2855,6 +3522,10 @@ export class AcTrBatchedGroup extends THREE.Group {
         source.getAttribute('instanceColorEnd').clone()
       )
     }
+    // Note: dash distance attributes are not cloned here. The wide-line
+    // batch (AcTrBatchedLine2) owns distance maintenance and restarts the
+    // dash phase at each packed entity, which also covers geometries
+    // entering via appendLine2Geometry.
     AcTrBufferGeometryUtil.safeComputeBoundingBox(geometry)
     AcTrBufferGeometryUtil.safeComputeBoundingSphere(geometry)
     return geometry
@@ -3086,9 +3757,28 @@ function hasPreviewDrawableGeometry(
   return 'geometry' in object && object.geometry != null
 }
 
+/**
+ * Returns the column length of a transform when x/y/z scales match.
+ *
+ * Non-uniform scales return null so dashed linetypes can be baked instead of
+ * instanced (dash length lives in geometry space).
+ *
+ * @param matrix - World matrix of one drawable.
+ * @returns Uniform scale, or null when the 3×3 is not a similarity.
+ */
+function uniformColumnScale(matrix: THREE.Matrix4): number | null {
+  const e = matrix.elements
+  const sx = Math.hypot(e[0], e[1], e[2])
+  const sy = Math.hypot(e[4], e[5], e[6])
+  const sz = Math.hypot(e[8], e[9], e[10])
+  const max = Math.max(sx, sy, sz)
+  const min = Math.min(sx, sy, sz)
+  if (max === 0) return null
+  if ((max - min) / max > 1e-4) return null
+  return sx
+}
+
 const _v1 = /*@__PURE__*/ new THREE.Vector3()
 const _v2 = /*@__PURE__*/ new THREE.Vector3()
-const _unbatchedQuaternion = /*@__PURE__*/ new THREE.Quaternion()
-const _unbatchedScale = /*@__PURE__*/ new THREE.Vector3()
 const _intersectBox = /*@__PURE__*/ new THREE.Box3()
 const _intersectScratchBox = /*@__PURE__*/ new THREE.Box3()

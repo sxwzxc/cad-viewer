@@ -31,11 +31,17 @@ export default {
       description:
         'Nastaví přesnost zobrazení úhlů, používá se společně s AUNITS'
     },
+    bmpout: {
+      description: 'Exportuje do BMP'
+    },
     cdxf: {
       description: 'Exportuje aktuální výkres do DXF'
     },
     cpdf: {
       description: 'Exportuje aktuální výkres do PDF'
+    },
+    '-cpdf': {
+      description: 'Exportuje aktuální výkres do PDF pomocí příkazového řádku'
     },
     cecolor: {
       description: 'Nastaví aktuální výchozí barvu pro nově vytvářené objekty'
@@ -213,6 +219,9 @@ export default {
     insunits: {
       description:
         'Určuje jednotky výkresu pro automatické měřítko vkládaných bloků, obrázků nebo externích referencí'
+    },
+    jpgout: {
+      description: 'Exportuje do JPEG'
     },
     laycur: {
       description: 'Změní hladinu vybraných objektů na aktuální hladinu',

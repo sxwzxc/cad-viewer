@@ -6,12 +6,19 @@ import {
   acedIsHandheldDevice,
   acedIsMobileOrPadUi,
   acedIsMobileUiLayout,
+  acedShouldHideDesktopCommandLine,
   acedSubscribeUiLayout,
   ML_UI_COARSE_POINTER_MEDIA_QUERY,
   ML_UI_COMPACT_MAX_WIDTH,
   ML_UI_COMPACT_MEDIA_QUERY,
   ML_UI_MOBILE_MAX_WIDTH,
-  ML_UI_MOBILE_MEDIA_QUERY
+  ML_UI_MOBILE_MEDIA_QUERY,
+  ML_UI_SESSION_PANEL_INSET,
+  ML_UI_SESSION_PANEL_MAX_WIDTH,
+  ML_UI_SESSION_PANEL_WIDTH,
+  ML_UI_Z_CANVAS_HTML_OVERLAY,
+  ML_UI_Z_CANVAS_HTML_STROKE,
+  ML_UI_Z_DRAW_STYLE_TOOLBAR
 } from '../src/editor/global/AcEdUiLayout'
 
 type MediaListener = (event: MediaQueryListEvent) => void
@@ -61,6 +68,16 @@ describe('AcEdUiLayout', () => {
   it('exports mobile layout constants', () => {
     expect(ML_UI_MOBILE_MAX_WIDTH).toBe(600)
     expect(ML_UI_MOBILE_MEDIA_QUERY).toBe('(max-width: 600px)')
+    expect(ML_UI_SESSION_PANEL_WIDTH).toBe(440)
+    expect(ML_UI_SESSION_PANEL_INSET).toBe(24)
+    expect(ML_UI_SESSION_PANEL_MAX_WIDTH).toBe('calc(100vw - 24px)')
+    expect(ML_UI_Z_CANVAS_HTML_STROKE).toBe(1)
+    expect(ML_UI_Z_CANVAS_HTML_OVERLAY).toBe(2)
+    expect(ML_UI_Z_DRAW_STYLE_TOOLBAR).toBe(45)
+    expect(ML_UI_Z_CANVAS_HTML_STROKE).toBeLessThan(
+      ML_UI_Z_CANVAS_HTML_OVERLAY
+    )
+    expect(ML_UI_Z_CANVAS_HTML_OVERLAY).toBeLessThan(ML_UI_Z_DRAW_STYLE_TOOLBAR)
   })
 
   it('exports compact layout constants', () => {
@@ -157,6 +174,27 @@ describe('AcEdUiLayout', () => {
     expect(acedIsHandheldDevice()).toBe(false)
     expect(acedIsMobileOrPadUi()).toBe(false)
 
+    media.restore()
+  })
+})
+
+describe('acedShouldHideDesktopCommandLine', () => {
+  it('hides the CLI on the phone breakpoint even when idle', () => {
+    const media = installMatchMedia(
+      query => query === ML_UI_MOBILE_MEDIA_QUERY
+    )
+    expect(acedShouldHideDesktopCommandLine(false)).toBe(true)
+    expect(acedShouldHideDesktopCommandLine(true)).toBe(true)
+    media.restore()
+  })
+
+  it('hides the CLI on pad only while a prompt is active', () => {
+    const media = installMatchMedia(
+      query => query === ML_UI_COMPACT_MEDIA_QUERY
+    )
+    expect(acedGetUiLayout()).toBe('pad')
+    expect(acedShouldHideDesktopCommandLine(false)).toBe(false)
+    expect(acedShouldHideDesktopCommandLine(true)).toBe(true)
     media.restore()
   })
 })

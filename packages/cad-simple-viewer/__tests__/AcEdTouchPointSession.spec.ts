@@ -8,6 +8,7 @@ import {
   acedClearFollowingClickSink,
   acedIsGhostClientOrigin,
   acedIsTouchDerivedMouseEvent,
+  acedIsTouchLongPressContextMenu,
   acedResetTouchMouseGuard,
   acedShouldIgnoreCompatMouse,
   acedSinkFollowingClick,
@@ -40,6 +41,16 @@ describe('AcEdTouchPointSession', () => {
     expect(onLongPress).toHaveBeenCalledTimes(1)
     expect(session.phase).toBe('loupe')
     expect(session.end()).toBe('commit')
+  })
+
+  it('uses half a second as the default long-press delay', () => {
+    const onLongPress = jest.fn()
+    const session = new AcEdTouchPointSession()
+    session.start(1, 10, 20, onLongPress)
+    jest.advanceTimersByTime(499)
+    expect(onLongPress).not.toHaveBeenCalled()
+    jest.advanceTimersByTime(1)
+    expect(onLongPress).toHaveBeenCalledTimes(1)
   })
 
   it('cancels to pan when moved before the timer', () => {
@@ -154,6 +165,40 @@ describe('acedIsTouchDerivedMouseEvent', () => {
         sourceCapabilities: { firesTouchEvents: true }
       } as unknown as MouseEvent)
     ).toBe(true)
+  })
+})
+
+describe('acedIsTouchLongPressContextMenu', () => {
+  afterEach(() => {
+    acedResetTouchMouseGuard()
+  })
+
+  it('treats a firesTouchEvents contextmenu as a long-press leftover', () => {
+    expect(
+      acedIsTouchLongPressContextMenu({
+        button: 2,
+        sourceCapabilities: { firesTouchEvents: true }
+      } as unknown as MouseEvent)
+    ).toBe(true)
+  })
+
+  it('treats contextmenu during the compat-mouse guard as a leftover', () => {
+    acedSinkFollowingClick()
+    expect(
+      acedIsTouchLongPressContextMenu({
+        button: 2,
+        pointerType: 'mouse'
+      } as unknown as MouseEvent)
+    ).toBe(true)
+  })
+
+  it('does not treat a real mouse right-click as a leftover', () => {
+    expect(
+      acedIsTouchLongPressContextMenu({
+        button: 2,
+        pointerType: 'mouse'
+      } as unknown as MouseEvent)
+    ).toBe(false)
   })
 })
 

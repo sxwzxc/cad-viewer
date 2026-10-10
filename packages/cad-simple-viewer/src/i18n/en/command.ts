@@ -31,11 +31,17 @@ export default {
       description:
         'Sets the display precision for angles, used together with AUNITS'
     },
+    bmpout: {
+      description: 'Exports to BMP'
+    },
     cdxf: {
       description: 'Exports current drawing to DXF'
     },
     cpdf: {
       description: 'Exports current drawing to PDF'
+    },
+    '-cpdf': {
+      description: 'Exports current drawing to PDF using command-line options'
     },
     cecolor: {
       description: 'Sets the current default color for newly created objects'
@@ -210,6 +216,9 @@ export default {
     insunits: {
       description:
         'Specifies drawing units for automatic scaling of inserted blocks, images, or xrefs'
+    },
+    jpgout: {
+      description: 'Exports to JPEG'
     },
     laycur: {
       description:

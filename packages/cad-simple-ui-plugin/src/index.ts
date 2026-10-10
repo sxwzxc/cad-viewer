@@ -10,7 +10,10 @@ export {
   acuiCreateSimpleUiPlugin
 } from './createSimpleUiPlugin'
 export type { AcUiDockPanelTab } from './ui/AcUiDockPanel'
-export { acuiRegisterSimpleUiPlugin } from './register'
+export {
+  acuiRegisterSimpleUiPlugin,
+  registerSimpleUiPlugin
+} from './register'
 export {
   acuiCreateToolbarLayoutSwitcher,
   acuiPrependToolbarLayoutSwitcher
@@ -60,6 +63,7 @@ export {
   acuiToolbarPreset
 } from './config/toolbarItemUtils'
 export { AcUiI18n, acuiRegisterSimpleUiI18n } from './i18n'
-export type { AcUiToolbarMountOptions } from './ui/AcUiToolbar'
+export type { AcUiToolbarMountOptions } from '@mlightcad/cad-simple-viewer'
+export { AcUiToolbar } from '@mlightcad/cad-simple-viewer'
 export type { AcApLayerInfo } from '@mlightcad/cad-simple-viewer'
 export { AcApLayerStore } from '@mlightcad/cad-simple-viewer'

@@ -1,5 +1,5 @@
 import {
-  acExMeasurementSidecarFileName,
+  acexMeasurementSidecarFileName,
   parseAcExMeasurementSidecar,
   stringifyAcExMeasurementSidecar
 } from '../src/AcExMeasurementSidecar'
@@ -143,13 +143,13 @@ describe('AcExMeasurementSidecar', () => {
   })
 
   it('suggests sidecar file names', () => {
-    expect(acExMeasurementSidecarFileName('plan.dwg')).toBe(
+    expect(acexMeasurementSidecarFileName('plan.dwg')).toBe(
       'plan.measurement.json'
     )
-    expect(acExMeasurementSidecarFileName('plan.html')).toBe(
+    expect(acexMeasurementSidecarFileName('plan.html')).toBe(
       'plan.measurement.json'
     )
-    expect(acExMeasurementSidecarFileName()).toBe('drawing.measurement.json')
+    expect(acexMeasurementSidecarFileName()).toBe('drawing.measurement.json')
   })
 
   it('keeps legacy arc records that omit the through point', () => {
@@ -180,6 +180,32 @@ describe('AcExMeasurementSidecar', () => {
       radius: 5,
       start: { x: 5, y: 0 },
       end: { x: 0, y: 5 }
+    })
+  })
+
+  it('round-trips radius measurement geometry', () => {
+    const parsed = parseAcExMeasurementSidecar(
+      stringifyAcExMeasurementSidecar({
+        version: 1,
+        measurements: [
+          {
+            id: 'r1',
+            type: 'radius',
+            style: { color: '#08e8de', lineWeight: 0, fontSize: 13 },
+            geometry: {
+              type: 'radius',
+              center: { x: 0, y: 0 },
+              point: { x: 10, y: 0 }
+            }
+          }
+        ]
+      })
+    )
+    expect(parsed.measurements).toHaveLength(1)
+    expect(parsed.measurements[0]?.geometry).toEqual({
+      type: 'radius',
+      center: { x: 0, y: 0 },
+      point: { x: 10, y: 0 }
     })
   })
 })

@@ -533,17 +533,22 @@ export default {
       description: 'Yeni işaret çizimleri için rengi ayarlar'
     },
     markupFontSize: {
-      text: 'Yazı Boyutu',
-      description: 'Metin ve çağrı işaretleri için yazı boyutunu ayarlar'
+      text: 'Yazı yüksekliği',
+      description:
+        'İşaretler için yazı yüksekliği ayarlarını açar (ekrana sığdır veya dünya yüksekliği)',
+      fit: 'Fit',
+      wcs: 'WCS'
     },
     measurementColor: {
       text: 'Renk',
       description: 'Seçili ölçümün veya sonraki ölçümlerin rengini ayarlar'
     },
     measurementFontSize: {
-      text: 'Yazı Boyutu',
+      text: 'Yazı yüksekliği',
       description:
-        'Seçili ölçümün veya sonraki ölçümlerin yazı boyutunu ayarlar'
+        'Seçili ölçümün veya sonraki ölçümlerin yazı yüksekliği ayarlarını açar',
+      fit: 'Fit',
+      wcs: 'WCS'
     },
     showMarkup: {
       text: 'Göster',
@@ -571,15 +576,32 @@ export default {
     },
     switchBg: {
       text: 'Değiştir',
-      description: 'Çizim arka planını beyaz ve siyah arasında değiştirir'
+      description: 'Çizim arka planını beyaz ve siyah arasında değiştirir',
+      disabledInReadingMode:
+        'Okuma modundayken kullanılamaz (beyaz tuval sabittir)'
+    },
+    zoom: {
+      text: 'Yakınlaştır',
+      description:
+        'Yakınlaştırma araçları: kayıtlı görünüm, sınırlar, akıllı sınırlar ve pencere'
+    },
+    zoomSaved: {
+      text: 'Kayıtlı',
+      description:
+        'AutoCAD kayıtlı görünümünü (VPORT / düzen limitleri) veya açılış görünümünü geri yükler'
     },
     zoomToExtent: {
-      text: 'Tümünü Yakınlaştır',
+      text: 'Sınırlar',
       description:
         'Tüm varlıkların maksimum sınırlarını görüntülemek için yakınlaştırır'
     },
+    zoomSmartExtents: {
+      text: 'Akıllı',
+      description:
+        'Uzak aykırı varlıkları yok sayarak baskın geometri kümesine yakınlaştırır'
+    },
     zoomToBox: {
-      text: 'Pencereyi Yakınlaştır',
+      text: 'Pencere',
       description:
         'Dikdörtgen bir pencereyle belirtilen alanı görüntülemek için yakınlaştırır'
     }
@@ -590,7 +612,6 @@ export default {
       commandLine: 'Komut Satırı',
       coordinate: 'Koordinat',
       entityInfo: 'Varlık Bilgisi',
-      fileName: 'Dosya Adı',
       languageSelector: 'Dil Seçici',
       ribbon: 'Şerit',
       toolbar: 'Araç Çubuğu',
@@ -1000,21 +1021,41 @@ export default {
     failedToGetAvaiableFonts:
       '"{url}" adresinden kullanılabilir yazı tipleri alınamadı!',
     failedToOpenFile: '"{fileName}" dosyası açılamadı!',
+    failedToOpenFileToast:
+      '"{fileName}" açılamadı. Ayrıntılar için bildirim merkezine bakın.',
     failedToOpenFileWorkerOom:
-      '"{fileName}" açılamadı. Çizim mevcut bellek için çok büyük.',
+      '"{fileName}" açılamadı. Ayrıştırma, yetersiz bellek nedeniyle başarısız oldu (LibreDWG parser). Büyük çizimleri çökmeden açmak için ticari DWG parser satın almak üzere {dwgParserLink} bağlantısına tıklayabilirsiniz.',
+    failedToOpenFileWorkerOomLink: 'bu sayfa',
     failedToOpenFileWorkerTimeout:
       '"{fileName}" açılamadı. Çizim ayrıştırılırken işlem zaman aşımına uğradı.',
     failedToOpenFileFontLoadFailed:
       '"{fileName}" açılamadı. Gerekli yazı tipleri yüklenemedi.',
+    failedToOpenFileLicenseExpired:
+      '"{fileName}" açılamadı. DWG dönüştürücü lisansı süresi dolmuş.',
+    failedToOpenFileLicenseInvalid:
+      '"{fileName}" açılamadı. DWG dönüştürücü lisansı eksik veya geçersiz.',
     fetchingDrawingFile: 'Dosya alınıyor ...',
     unknownEntities:
-      'Bu çizim {count} bilinmeyen veya desteklenmeyen varlık içeriyor! Bu varlıklar gösterilmeyecek.'
+      'Bu çizim {count} bilinmeyen veya desteklenmeyen varlık içeriyor! Bu varlıklar gösterilmeyecek.',
+    tianzhengEntities:
+      'Bu çizim TArch / Tianzheng (veya benzeri üçüncü taraf) özel varlıklar içeriyor (yaklaşık {count}). Bu ortamda tam olarak ayrıştırılamazlar, bu nedenle bazı içerikler görüntülenmeyebilir.',
+    emptyProxyEntities:
+      'Bu çizim proxy grafiği olmayan {count} özel varlık içeriyor! Bu varlıklar gösterilmeyecek.'
   },
   notification: {
     center: {
       title: 'Bildirimler',
       clearAll: 'Tümünü Temizle',
       noNotifications: 'Bildirim yok'
+    },
+    group: {
+      fontMissed: 'Eksik Yazı Tipleri',
+      fontMissedSummary:
+        '{count} yazı tipi ile ilgili mesaj. Ayrıntılar için tıklayın.',
+      unsupportedEntities: 'Desteklenmeyen Varlıklar',
+      unsupportedEntitiesSummary:
+        '{count} ayrıştırma ile ilgili mesaj. Ayrıntılar için tıklayın.',
+      genericSummary: '{count} mesaj. Ayrıntılar için tıklayın.'
     },
     time: {
       justNow: 'Az önce',
@@ -1024,12 +1065,18 @@ export default {
     },
     title: {
       failedToOpenFile: 'Dosya Açılamadı',
-      failedToOpenFileWorkerOom: 'Çizim Çok Büyük',
+      failedToOpenFileWorkerOom: 'Yetersiz Bellek',
       failedToOpenFileWorkerTimeout: 'Açma Zaman Aşımı',
       failedToOpenFileFontLoadFailed: 'Yazı Tipi Yüklenemedi',
+      failedToOpenFileLicenseExpired: 'Lisans Süresi Doldu',
+      failedToOpenFileLicenseInvalid: 'Geçersiz Lisans',
       fontNotFound: 'Yazı Tipi Bulunamadı',
       fontNotLoaded: 'Yazı Tipi Yüklenemedi',
-      parsingWarning: 'Çizim Ayrıştırma Sorunları'
+      parsingWarning: 'Çizim Ayrıştırma Sorunları',
+      systemMessage: 'Sistem Mesajı',
+      systemWarning: 'Sistem Uyarısı',
+      systemError: 'Sistem Hatası',
+      systemInfo: 'Sistem Bilgisi'
     }
   }
 }

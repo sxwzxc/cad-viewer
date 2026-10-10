@@ -35,6 +35,7 @@ import {
   ICON_MEASURE_CONTINUOUS,
   ICON_MEASURE_COORDINATE,
   ICON_MEASURE_DISTANCE,
+  ICON_MEASURE_RADIUS,
   ICON_MEASUREMENT_PANEL,
   ICON_ORTHO_MODE,
   ICON_OSNAP,
@@ -42,12 +43,14 @@ import {
   ICON_POLAR_TRACKING,
   ICON_SELECT,
   ICON_SETTINGS,
+  ICON_SIMULATED_MOUSE,
   ICON_SWITCH_BG,
   ICON_THEME_DARK,
   ICON_THEME_LIGHT,
   ICON_ZOOM_BOX,
   ICON_ZOOM_EXTENT,
   ICON_ZOOM_ORIGINAL,
+  ICON_ZOOM_SMART,
   ICON_ZOOM_WINDOW
 } from '@mlightcad/cad-simple-viewer/icons'
 
@@ -55,13 +58,15 @@ import {
  * Inline SVG markup keyed by toolbar / layer UI usage.
  * Each value is a complete `<svg>…</svg>` string using `currentColor`.
  */
-export const acExHtmlIcons = {
+export const AcExHtmlIcons = {
   /** Select tool toolbar icon. */
   select: ICON_SELECT,
   /** Pan tool toolbar icon. */
   pan: ICON_PAN,
   /** Zoom-to-extents toolbar icon. */
   zoomExtent: ICON_ZOOM_EXTENT,
+  /** Intelligent zoom-to-extents (dominant cluster) toolbar icon. */
+  zoomSmart: ICON_ZOOM_SMART,
   /** Zoom-window / per-layer zoom-to-box toolbar icon. */
   zoomBox: ICON_ZOOM_BOX,
   /** Measure-distance toolbar icon. */
@@ -72,6 +77,8 @@ export const acExHtmlIcons = {
   measureAngle: ICON_MEASURE_ANGLE,
   /** Measure-arc-length toolbar icon. */
   measureArc: ICON_MEASURE_ARC,
+  /** Measure-radius toolbar icon. */
+  measureRadius: ICON_MEASURE_RADIUS,
   /** Measure-area toolbar icon. */
   measureArea: ICON_MEASURE_AREA,
   /** Measure-coordinate toolbar icon. */
@@ -84,8 +91,10 @@ export const acExHtmlIcons = {
   layout: ICON_LAYOUT,
   /** Per-layer zoom-to-box button icon (same glyph as zoom window). */
   zoomWindow: ICON_ZOOM_WINDOW,
-  /** Restore the viewport captured when the HTML first opened. */
+  /** Restore AutoCAD's saved view (VPORT / layout limits). */
   zoomOriginal: ICON_ZOOM_ORIGINAL,
+  /** Alias for {@link AcExHtmlIcons.zoomOriginal} (saved-view action). */
+  zoomSaved: ICON_ZOOM_ORIGINAL,
   /** “Show all layers” action icon. */
   layerOn: ICON_LAYER_ON,
   /** “Hide all layers” action icon. */
@@ -140,6 +149,8 @@ export const acExHtmlIcons = {
   clearMarkups: ICON_CLEAR_MARKUPS,
   /** Phone settings parent toolbar icon. */
   settings: ICON_SETTINGS,
+  /** Simulated-mouse touch pick toggle. */
+  simulatedMouse: ICON_SIMULATED_MOUSE,
   /** Toggle drawing background between black and white. */
   switchBg: ICON_SWITCH_BG,
   /** Switch to light UI chrome. */
@@ -156,12 +167,12 @@ export const acExHtmlIcons = {
  * phone layouts can show a translated caption under the icon. Pad/desktop CSS
  * hides the label; `title` / `aria-label` remain the accessible name.
  *
- * @param icon - SVG markup from {@link acExHtmlIcons}.
+ * @param icon - SVG markup from {@link AcExHtmlIcons}.
  * @param title - Default `title`, `aria-label`, and label text before i18n.
  * @param attrs - Additional attributes (e.g. `data-action`, `data-i18n-key`).
  * @returns HTML string for one toolbar button.
  */
-export function acExToolbarButton(
+export function acexToolbarButton(
   icon: string,
   title: string,
   attrs: Record<string, string>
@@ -179,11 +190,11 @@ export function acExToolbarButton(
 /**
  * Builds a flyout menu item with icon + label (cad-simple-ui-plugin style).
  *
- * @param icon - SVG markup from {@link acExHtmlIcons}.
+ * @param icon - SVG markup from {@link AcExHtmlIcons}.
  * @param label - Default visible label before i18n overrides.
  * @param attrs - Additional attributes (e.g. `data-action`, `data-i18n-key`).
  */
-export function acExDropdownItem(
+export function acexDropdownItem(
   icon: string,
   label: string,
   attrs: Record<string, string>

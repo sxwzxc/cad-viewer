@@ -165,6 +165,22 @@ export function acapOverlayDash(
 }
 
 /**
+ * Scales a world-space overlay length (arrow head, etc.) with a font-size change
+ * so arrows stay proportional to the value capsule when the user resizes text.
+ */
+export function acapScaleWcsWithFont(
+  sizeWcs: number | undefined,
+  prevFontPx: number,
+  nextFontPx: number
+): number | undefined {
+  if (!(sizeWcs != null && sizeWcs > 0)) return sizeWcs
+  if (!(prevFontPx > 0) || !(nextFontPx > 0) || nextFontPx === prevFontPx) {
+    return sizeWcs
+  }
+  return sizeWcs * (nextFontPx / prevFontPx)
+}
+
+/**
  * Orthographic `baseZoom` that makes a fixed CSS size match a world-space size
  * at the current view (for {@link AcTrHtmlElement.scaleWithView}).
  */
@@ -230,6 +246,13 @@ export function acapSeedOverlaySizesFromWcs(
     }
   }
 
+  if (fontSizePx != null && fontSizePx > 0) {
+    for (const canvas of canvases ?? []) {
+      // Selection glow (drop-shadow em) tracks the paired badge font size.
+      canvas.style.fontSize = `${fontSizePx}px`
+    }
+  }
+
   // Pair text screen/WCS axes only — never mix fontSize with strokeWidthWcs.
   if (
     !(fontSizePx != null && fontSizePx > 0) ||
@@ -241,7 +264,50 @@ export function acapSeedOverlaySizesFromWcs(
   const baseZoom = acapBaseZoomFromWcsSize(fontSizePx, textHeightWcs, view)
   if (baseZoom == null) return
   for (const el of elements ?? []) {
+    const sized = el as { setFontSize?: (size: number) => void }
+    sized.setFontSize?.(fontSizePx)
     if (el.scaleWithView) el.baseZoom = baseZoom
+  }
+}
+
+/**
+ * Keeps live draw-preview overlays sized for the active text-height mode.
+ *
+ * - `'custom'`: seed {@link AcTrHtmlElement.baseZoom} from WCS so capsules
+ *   scale with camera zoom during drawing.
+ * - `'adaptive'` (or missing WCS): disable view sync so size stays constant
+ *   in screen pixels while drawing.
+ */
+export function acapSyncLiveOverlayTextHeight(
+  view: AcEdBaseView,
+  elements: readonly AcTrHtmlElement[],
+  style: {
+    fontSize?: number
+    textHeightMode?: 'adaptive' | 'custom'
+    textHeightWcs?: number
+  }
+): void {
+  const fontSize =
+    style.fontSize != null && style.fontSize > 0 ? style.fontSize : 0
+  const custom =
+    style.textHeightMode === 'custom' &&
+    style.textHeightWcs != null &&
+    style.textHeightWcs > 0 &&
+    fontSize > 0
+  if (custom) {
+    for (const el of elements) {
+      el.scaleWithView = true
+    }
+    acapSeedOverlaySizesFromWcs(view, {
+      textHeightWcs: style.textHeightWcs,
+      fontSizePx: fontSize,
+      elements
+    })
+    return
+  }
+  for (const el of elements) {
+    el.scaleWithView = false
+    el.baseZoom = undefined
   }
 }
 

@@ -6,14 +6,21 @@ import {
 } from '@mlightcad/cad-simple-ui-plugin'
 import { acuiRegisterSimpleUiPlugin } from '@mlightcad/cad-simple-ui-plugin/register'
 import {
+  acapAppendLinkedText,
+  type AcApDataSourceMenuItem,
   AcApDocManager,
+  acapFormatOpenFileErrorToastMessage,
+  AcApI18n,
   AcApOpenDatabaseOptions,
-  AcApQNewCmd,
+  acapRunDataSourceMenuAction,
   AcApSettingManager,
   acedApplyUiTheme,
   acedIsCompactUiLayout,
   AcEdOpenMode,
+  ACGI_PAPER_SPACE_BACKGROUND,
+  AcUiFileOpenPanel,
   eventBus,
+  layoutBackgroundColorFromRgb,
   LIBREDWG_PARSER_WORKER_FILE,
   MTEXT_RENDERER_WORKER_FILE
 } from '@mlightcad/cad-simple-viewer'
@@ -33,6 +40,8 @@ import {
   getCurrentDemoToolbarLayoutId
 } from './demoToolbarPresets'
 import { setupFileSidebarResize } from './fileSidebarResize'
+import { getGoogleDriveEnvConfig } from './googleDriveEnv'
+import { getOneDriveEnvConfig } from './onedriveEnv'
 import { registerLazyPlugins } from './register'
 import { registerLibreDwgConverter } from './registerLibreDwg'
 
@@ -95,7 +104,8 @@ function installOpenProfConsoleCapture(): void {
 class CadViewerApp {
   private container: HTMLDivElement
   private fileInput: HTMLInputElement
-  private centerOpenButton: HTMLButtonElement
+  private fileOpenPanelHost: HTMLElement
+  private fileOpenPanel: AcUiFileOpenPanel | null = null
   private viewerPane: HTMLElement
   private emptyState: HTMLDivElement
   private predefinedButtons: NodeListOf<HTMLButtonElement>
@@ -138,9 +148,9 @@ class CadViewerApp {
     this.fileInput = document.getElementById(
       'fileInputElement'
     ) as HTMLInputElement
-    this.centerOpenButton = document.getElementById(
-      'centerOpenButton'
-    ) as HTMLButtonElement
+    this.fileOpenPanelHost = document.getElementById(
+      'fileOpenPanelHost'
+    ) as HTMLElement
     this.viewerPane = document.getElementById('viewerPane') as HTMLElement
     this.emptyState = document.getElementById('emptyState') as HTMLDivElement
     this.predefinedButtons = document.querySelectorAll(
@@ -216,7 +226,13 @@ class CadViewerApp {
       'devNewButton'
     ) as HTMLButtonElement
 
+    acedApplyUiTheme('dark', document.documentElement)
+
     this.setupFileHandling()
+    this.setupFileOpenPanel()
+    // Defer AcApDocManager / simple-ui creation until the user opens or creates
+    // a drawing (or signs in to a cloud source). Eager init showed the blank
+    // viewer chrome under the transparent landing panel.
     this.setupPredefinedFileActions()
     this.setupMobileSidebar()
     const fileSidebarResizeHandle = document.getElementById(
@@ -230,6 +246,21 @@ class CadViewerApp {
     this.setupDockMenu()
     this.setupViewerToolbarMenu()
     this.updateEmptyStateVisibility()
+  }
+
+  private buildOpenOptions(
+    overrides: Partial<AcApOpenDatabaseOptions> = {}
+  ): AcApOpenDatabaseOptions {
+    return {
+      minimumChunkSize: 1000,
+      mode: AcEdOpenMode.Write,
+      progressiveRendering: isProgressiveOpenMode(),
+      sysVars: {
+        lwdisplay: false,
+        paperbkcolor: layoutBackgroundColorFromRgb(ACGI_PAPER_SPACE_BACKGROUND)
+      },
+      ...overrides
+    }
   }
 
   private setupDisplayMenu() {
@@ -817,17 +848,63 @@ class CadViewerApp {
       this.setLoadingState(true)
     })
 
+    eventBus.on('failed-to-open-file', params => {
+      this.showMessage(acapFormatOpenFileErrorToastMessage(params), 'error')
+      this.finishLoadingState()
+    })
+
     this.documentEventsRegistered = true
+  }
+
+  /**
+   * Whether viewer chrome (toolbar / command line) should be shown.
+   * Hidden on the landing panel; shown once a drawing is open or being opened.
+   */
+  private shouldShowViewerChrome(): boolean {
+    return this.hasOpenedFile || this.isLoadingFile
+  }
+
+  /** Shows or hides viewer chrome without persisting those preferences. */
+  private setViewerChromeVisible(visible: boolean) {
+    if (visible) {
+      AcApSettingManager.instance.clearSessionOverride('isShowCommandLine')
+      AcApSettingManager.instance.clearSessionOverride('isShowShortCutToolbar')
+    } else {
+      AcApSettingManager.instance.apply(
+        {
+          isShowCommandLine: false,
+          isShowShortCutToolbar: false
+        },
+        { persist: false }
+      )
+    }
+    this.getSimpleUiPlugin()?.setToolbarVisible(visible)
   }
 
   private async initialize() {
     if (this.isInitialized) return
 
     try {
+      acedApplyUiTheme('dark', document.documentElement)
       acedApplyUiTheme('dark', this.viewerPane)
 
+      const showChrome = this.shouldShowViewerChrome()
+      // Hide command line / shortcut toolbar before createInstance mounts them,
+      // so cloud sign-in (init without opening a file) does not flash chrome.
+      if (!showChrome) {
+        AcApSettingManager.instance.apply(
+          {
+            isShowCommandLine: false,
+            isShowShortCutToolbar: false
+          },
+          { persist: false }
+        )
+      }
+
       const openProf = isOpenProfMode()
-      const useWorkers = openProf ? isWorkerOpenMode() : true
+      // Prefer main-thread MTEXT by default (less peak memory). Pass `?worker=1`
+      // with openprof, or rely on worker mode only when explicitly requested.
+      const useWorkers = openProf ? isWorkerOpenMode() : false
       const dwgParserUrl = `./workers/${LIBREDWG_PARSER_WORKER_FILE}`
       registerLibreDwgConverter(dwgParserUrl)
       AcApDocManager.createInstance({
@@ -836,16 +913,9 @@ class CadViewerApp {
         autoResize: true,
         baseUrl: 'https://cdn.jsdelivr.net/gh/mlightcad/cad-data@main/',
         commandAliases: EXAMPLE_COMMAND_ALIASES,
-        // OPENPROF default: main-thread MTEXT (skip worker transfer cost).
-        useMainThreadDraw: openProf ? !useWorkers : false,
-        openDocumentDefaults: {
-          minimumChunkSize: 1000,
-          mode: AcEdOpenMode.Write,
-          progressiveRendering: false,
-          sysVars: {
-            lwdisplay: false
-          }
-        },
+        // Main-thread MTEXT uses less memory; worker mode is opt-in via ?worker=1.
+        useMainThreadDraw: openProf ? !useWorkers : true,
+        openDocumentDefaults: () => this.buildOpenOptions(),
         webworkerFileUrls: {
           mtextRender: `./workers/${MTEXT_RENDERER_WORKER_FILE}`,
           dwgParser: dwgParserUrl
@@ -858,7 +928,8 @@ class CadViewerApp {
         console.log(`[openprof] mode=${w.__OPEN_MODE__}`)
       }
 
-      registerLazyPlugins()
+      await registerLazyPlugins()
+      this.fileOpenPanel?.refreshSourceButtons()
 
       await acuiRegisterSimpleUiPlugin(AcApDocManager.instance.pluginManager, {
         host: this.viewerPane,
@@ -901,6 +972,9 @@ class CadViewerApp {
       setupAgentIntegration(plugin)
 
       this.isInitialized = true
+      if (!showChrome) {
+        this.setViewerChromeVisible(false)
+      }
       this.updateDevToolbarLabels()
     } catch (error) {
       log.error('Failed to initialize CAD viewer:', error)
@@ -917,10 +991,93 @@ class CadViewerApp {
       }
       this.fileInput.value = ''
     })
+  }
 
-    this.centerOpenButton.addEventListener('click', () => {
-      this.fileInput.click()
+  private buildLandingCloudMenuItems(): AcApDataSourceMenuItem[] {
+    const signInTemplate = AcApI18n.t('main.dataSource.signInTo')
+    const items: AcApDataSourceMenuItem[] = []
+    if (getOneDriveEnvConfig()) {
+      const name = AcApI18n.t('main.dataSource.onedrive')
+      items.push({
+        id: 'onedrive:sign-in',
+        sourceId: 'onedrive',
+        action: 'sign-in',
+        labelKey: 'main.dataSource.signInTo',
+        labelParams: { name },
+        label: signInTemplate.includes('{name}')
+          ? signInTemplate.split('{name}').join(name)
+          : `Sign in to ${name}`
+      })
+    }
+    if (getGoogleDriveEnvConfig()) {
+      const name = AcApI18n.t('main.dataSource.googledrive')
+      items.push({
+        id: 'googledrive:sign-in',
+        sourceId: 'googledrive',
+        action: 'sign-in',
+        labelKey: 'main.dataSource.signInTo',
+        labelParams: { name },
+        label: signInTemplate.includes('{name}')
+          ? signInTemplate.split('{name}').join(name)
+          : `Sign in to ${name}`
+      })
+    }
+    return items
+  }
+
+  private setupFileOpenPanel() {
+    if (!this.fileOpenPanelHost) return
+    this.fileOpenPanel = new AcUiFileOpenPanel({
+      host: this.fileOpenPanelHost,
+      theme: 'dark',
+      extraMenuItems: () => this.buildLandingCloudMenuItems(),
+      onLocalFile: file => {
+        this.setLoadingState(true)
+        void this.loadLocalFile(file)
+      },
+      onUrl: url => {
+        this.setLoadingState(true)
+        void this.loadRemoteUrl(url)
+      },
+      onDataSourceAction: item => {
+        // Keep the landing panel visible while the File Picker is open.
+        // Download/open show DocManager busy + open-file progress overlays.
+        void this.handleDataSourceMenuAction(item)
+      }
     })
+  }
+
+  private handleDataSourceMenuAction(item: AcApDataSourceMenuItem) {
+    const run = () =>
+      acapRunDataSourceMenuAction(item, this.buildOpenOptions()).finally(() =>
+        this.finishLoadingState()
+      )
+
+    // `await initialize()` is a microtask even when already done, which
+    // drops the user gesture and blocks the OneDrive File Picker popup.
+    if (this.isInitialized) {
+      void run()
+      return
+    }
+
+    if (item.action === 'pick') {
+      this.showMessage(
+        'The viewer is still starting. Sign in first, then open the file.',
+        'info'
+      )
+      this.finishLoadingState()
+      void this.initialize().then(() => {
+        this.fileOpenPanel?.refreshSourceButtons()
+      })
+      return
+    }
+
+    void this.initialize()
+      .then(() => {
+        this.fileOpenPanel?.refreshSourceButtons()
+        return acapRunDataSourceMenuAction(item, this.buildOpenOptions())
+      })
+      .finally(() => this.finishLoadingState())
   }
 
   private setupPredefinedFileActions() {
@@ -1031,8 +1188,12 @@ class CadViewerApp {
     this.setLoadingState(true)
 
     try {
-      const cmd = new AcApQNewCmd()
-      await cmd.execute(AcApDocManager.instance.context)
+      const success = await AcApDocManager.instance.newDocument(
+        this.buildOpenOptions()
+      )
+      if (!success) {
+        throw new Error('Failed to create new drawing')
+      }
       this.onFileOpened()
       this.predefinedButtons.forEach(item => item.classList.remove('active'))
       this.updateFileSidebarSubtitle('Tap to browse sample files')
@@ -1070,14 +1231,7 @@ class CadViewerApp {
           AcApDocManager.instance.curDocument.database
         )
       }
-      const options: AcApOpenDatabaseOptions = {
-        minimumChunkSize: 1000,
-        mode: AcEdOpenMode.Write,
-        progressiveRendering: isProgressiveOpenMode(),
-        sysVars: {
-          lwdisplay: false
-        }
-      }
+      const options: AcApOpenDatabaseOptions = this.buildOpenOptions()
 
       const openStartedAt = performance.now()
       const success = await AcApDocManager.instance.openDocument(
@@ -1119,9 +1273,8 @@ class CadViewerApp {
         this.predefinedButtons.forEach(item => item.classList.remove('active'))
         this.updateFileSidebarSubtitle('Tap to browse sample files')
         this.showMessage(`Successfully loaded: ${file.name}`, 'success')
-      } else {
-        this.showMessage(`Failed to load: ${file.name}`, 'error')
       }
+      // Open failures emit `failed-to-open-file` with a localized message.
     } catch (error) {
       log.error('Error loading file:', error)
       this.showMessage(`Error loading file: ${error}`, 'error')
@@ -1131,15 +1284,34 @@ class CadViewerApp {
     }
   }
 
+  private async loadRemoteUrl(url: string) {
+    await this.initialize()
+    this.clearMessages()
+
+    try {
+      const success = await AcApDocManager.instance.openUrl(
+        url,
+        this.buildOpenOptions()
+      )
+      if (success) {
+        this.onFileOpened()
+        const fileName = this.getFileNameFromUrl(url)
+        this.showMessage(`Successfully loaded: ${fileName}`, 'success')
+      }
+    } catch (error) {
+      log.error('Error loading remote file:', error)
+      this.showMessage(`Error loading file: ${error}`, 'error')
+    } finally {
+      this.finishLoadingState()
+    }
+  }
+
   private async loadPredefinedFile(url: string) {
     await this.initialize()
     this.clearMessages()
 
     try {
-      const options: AcApOpenDatabaseOptions = {
-        minimumChunkSize: 1000,
-        mode: AcEdOpenMode.Write
-      }
+      const options: AcApOpenDatabaseOptions = this.buildOpenOptions()
 
       const success = await AcApDocManager.instance.openUrl(url, options)
 
@@ -1147,12 +1319,8 @@ class CadViewerApp {
         this.onFileOpened()
         const fileName = this.getFileNameFromUrl(url)
         this.showMessage(`Successfully loaded: ${fileName}`, 'success')
-      } else {
-        this.showMessage(
-          `Failed to load: ${this.getFileNameFromUrl(url)}`,
-          'error'
-        )
       }
+      // Open failures emit `failed-to-open-file` with a localized message.
     } catch (error) {
       log.error('Error loading predefined file:', error)
       this.showMessage(`Error loading file: ${error}`, 'error')
@@ -1163,17 +1331,22 @@ class CadViewerApp {
 
   private onFileOpened() {
     this.hasOpenedFile = true
+    this.setViewerChromeVisible(true)
     this.updateEmptyStateVisibility()
     this.updateDevToolbarLabels()
   }
 
   private setLoadingState(loading: boolean) {
     this.isLoadingFile = loading
+    // Keep chrome in sync when loading starts after a deferred init that hid it
+    // (e.g. OneDrive sign-in without opening a file).
+    this.setViewerChromeVisible(this.shouldShowViewerChrome())
     this.updateEmptyStateVisibility()
   }
 
   private finishLoadingState() {
     this.isLoadingFile = false
+    this.setViewerChromeVisible(this.shouldShowViewerChrome())
     this.updateEmptyStateVisibility()
   }
 
@@ -1206,12 +1379,15 @@ class CadViewerApp {
 
     const popup = document.createElement('div')
     popup.className = `popup-message ${type}`
-    popup.textContent = message
     popup.style.position = 'fixed'
     popup.style.top = '1rem'
     popup.style.left = '50%'
     popup.style.transform = 'translateX(-50%)'
     popup.style.zIndex = '1000'
+    popup.style.display = 'flex'
+    popup.style.alignItems = 'flex-start'
+    popup.style.gap = '0.75rem'
+    popup.style.maxWidth = 'min(36rem, calc(100vw - 2rem))'
     popup.style.padding = '0.75rem 1.25rem'
     popup.style.borderRadius = '8px'
     popup.style.boxShadow = '0 2px 8px rgba(0,0,0,0.25)'
@@ -1233,14 +1409,58 @@ class CadViewerApp {
       popup.style.border = '1px solid #d1d5db'
     }
 
-    document.body.appendChild(popup)
+    const text = document.createElement('span')
+    acapAppendLinkedText(text, message)
+    text.style.flex = '1'
+    text.style.lineHeight = '1.4'
+    popup.appendChild(text)
 
-    setTimeout(() => {
+    let removeTimer: ReturnType<typeof setTimeout> | undefined
+
+    const dismiss = () => {
+      clearTimeout(hideTimer)
+      if (removeTimer != null) clearTimeout(removeTimer)
       popup.style.opacity = '0'
-      setTimeout(() => {
+      removeTimer = setTimeout(() => {
         popup.remove()
       }, 200)
-    }, 1200)
+    }
+
+    if (type === 'error') {
+      const closeBtn = document.createElement('button')
+      closeBtn.type = 'button'
+      closeBtn.setAttribute('aria-label', 'Close')
+      closeBtn.textContent = '×'
+      closeBtn.style.flexShrink = '0'
+      closeBtn.style.width = '1.5rem'
+      closeBtn.style.height = '1.5rem'
+      closeBtn.style.margin = '-0.15rem -0.35rem 0 0'
+      closeBtn.style.padding = '0'
+      closeBtn.style.border = 'none'
+      closeBtn.style.borderRadius = '4px'
+      closeBtn.style.background = 'transparent'
+      closeBtn.style.color = 'inherit'
+      closeBtn.style.fontSize = '1.25rem'
+      closeBtn.style.lineHeight = '1'
+      closeBtn.style.cursor = 'pointer'
+      closeBtn.style.opacity = '0.75'
+      closeBtn.addEventListener('mouseenter', () => {
+        closeBtn.style.opacity = '1'
+        closeBtn.style.background = 'rgba(0,0,0,0.06)'
+      })
+      closeBtn.addEventListener('mouseleave', () => {
+        closeBtn.style.opacity = '0.75'
+        closeBtn.style.background = 'transparent'
+      })
+      closeBtn.addEventListener('click', dismiss)
+      popup.appendChild(closeBtn)
+    }
+
+    document.body.appendChild(popup)
+
+    // Errors need more reading time (license / open failures can be long).
+    const visibleMs = type === 'error' ? 8000 : 1200
+    const hideTimer = setTimeout(dismiss, visibleMs)
   }
 
   private clearMessages() {

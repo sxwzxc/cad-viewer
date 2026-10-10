@@ -14,10 +14,22 @@ import {
 import { debounce } from 'lodash-es'
 
 import type { AcTrSpatialSearchOptions } from '../../spatialIndex/AcTrSpatialIndex'
+import type {
+  AcEdSessionAccessory,
+  AcEdSessionAccessoryHostInfo
+} from '../command/AcEdSessionAccessory'
+import { AcEdSessionProviderRegistry } from '../command/AcEdSessionProviderRegistry'
 import { AcEdCorsorType, AcEdSelectionSet } from '../input'
 import { AcEditor } from '../input/AcEditor'
-import { AcEdOsnapResolver } from '../input/AcEdOsnapResolver'
+import {
+  type AcEdOsnapPoint,
+  AcEdOsnapResolver
+} from '../input/AcEdOsnapResolver'
 import { AcEdMarkerManager } from '../input/marker'
+import {
+  acedHideMobileSnapLoupe,
+  acedRefreshMobileSnapLoupe
+} from '../input/ui/AcEdMobileSnapLoupe'
 import { AcEdHoverController } from './AcEdHoverController'
 import {
   AcEdSelectionAction,
@@ -27,6 +39,9 @@ import {
   AcEdSpatialQueryResultItemEx,
   isEffectiveSpatialQueryHit
 } from './AcEdSpatialQueryResult'
+import { AcEdViewMode } from './AcEdViewMode'
+
+export { AcEdViewMode } from './AcEdViewMode'
 
 /**
  * Interface to define arguments of mouse event events.
@@ -101,43 +116,6 @@ export interface AcEdViewRenderFrameEventArgs {
    * The camera used for rendering the frame
    */
   camera: unknown
-}
-
-/**
- * Enumeration of view interaction modes.
- *
- * The view mode determines how the view responds to user mouse interactions:
- * - In SELECTION mode, clicks select entities
- * - In PAN mode, clicks and drags pan the view
- *
- * @example
- * ```typescript
- * // Set to selection mode for entity picking
- * view.mode = AcEdViewMode.SELECTION;
- *
- * // Set to pan mode for view navigation
- * view.mode = AcEdViewMode.PAN;
- * ```
- */
-export enum AcEdViewMode {
-  /**
-   * Selection mode - mouse clicks select entities.
-   *
-   * In this mode:
-   * - Single clicks select individual entities
-   * - Drag operations can create selection boxes
-   * - Selected entities are highlighted with grip points
-   */
-  SELECTION = 0,
-  /**
-   * Pan mode - mouse interactions pan the view.
-   *
-   * In this mode:
-   * - Click and drag operations move the view
-   * - The cursor typically changes to indicate pan mode
-   * - Entity selection is disabled
-   */
-  PAN = 1
 }
 
 /**
@@ -271,12 +249,20 @@ export abstract class AcEdBaseView {
 
   /** OSNAP markers shown while dragging overlay measurement / markup grips. */
   private _overlayGripOsnapMarkers: AcEdMarkerManager | null = null
+  /** Last object snap acquired during {@link resolveOverlayGripPoint}, if any. */
+  private _lastOverlayGripOsnap: AcEdOsnapPoint | null = null
 
   /** The HTML canvas element for rendering */
   protected _canvas: HTMLCanvasElement
 
   /** The HTML element to contain this view */
   protected _container: HTMLElement
+
+  /**
+   * Long-lived session UI providers for this view (draw-style, etc.).
+   * Feature installs register here; mountable accessories are minted on demand.
+   */
+  readonly sessionProviders = new AcEdSessionProviderRegistry()
 
   /** Events fired by the view for various interactions */
   public readonly events = {
@@ -372,6 +358,29 @@ export abstract class AcEdBaseView {
    */
   get editor() {
     return this._editor
+  }
+
+  /**
+   * Active mount target for session accessories (desktop slot or mobile panel).
+   */
+  get sessionAccessoryHost(): AcEdSessionAccessoryHostInfo {
+    return this._editor.inputManager.sessionAccessoryHost
+  }
+
+  /**
+   * Selection-driven session accessory shown when no command accessory is mounted.
+   */
+  get selectionSessionAccessory(): AcEdSessionAccessory | null {
+    return this._editor.inputManager.selectionSessionAccessory
+  }
+
+  /**
+   * Updates the selection-driven session accessory forwarded to the input manager.
+   *
+   * @param value - Accessory to show on selection, or `null` to clear.
+   */
+  set selectionSessionAccessory(value: AcEdSessionAccessory | null) {
+    this._editor.inputManager.selectionSessionAccessory = value
   }
 
   /**
@@ -488,6 +497,18 @@ export abstract class AcEdBaseView {
   abstract zoomTo(box: AcGeBox2d, margin: number): void
 
   /**
+   * Returns the axis-aligned world XY extents of drawable geometry in the
+   * active layout.
+   *
+   * Prefer this over database header `EXTMIN`/`EXTMAX` (`database.extents`)
+   * for framing and export: real DWGs often ship stale header boxes that are
+   * many times larger than the geometry that is actually drawn.
+   *
+   * @returns Drawable extents, or `undefined` when the scene has no geometry.
+   */
+  abstract getDrawingExtents(): AcGeBox2d | undefined
+
+  /**
    * Zooms the view to fit all visible entities in the current drawing.
    *
    * This method automatically calculates the bounding box of all entities
@@ -518,6 +539,18 @@ export abstract class AcEdBaseView {
    * @return - Return true if zoomed to the layer successfully.
    */
   abstract zoomToFitLayer(layerName: string): boolean
+
+  /**
+   * Zooms to the dominant geometry cluster, peeling far outlier entities.
+   *
+   * Falls back to {@link zoomToFitDrawing} when clustering cannot produce a
+   * tighter box (empty scene, too few boxes, or no outliers).
+   *
+   * @param timeout - Maximum time (ms) to wait for entity conversion. Default: 0.
+   * @returns Resolves when the zoom has been applied (or skipped if still waiting
+   *   was cancelled — currently always resolves after the fit action runs).
+   */
+  abstract zoomToSmartExtents(timeout?: number): void | Promise<void>
 
   /**
    * Moves the current view to the specified 2D point at the given scale.
@@ -876,17 +909,33 @@ export abstract class AcEdBaseView {
 
   /**
    * Collects ids using window or crossing selection rules.
+   *
+   * Crossing hits come from entity AABBs in the spatial index. Long polylines
+   * can therefore match a pick rectangle that sits in empty interior space.
+   * Subclasses with access to the drawing database should override
+   * {@link refineCrossingSelectionHits} to drop those false positives.
    */
   protected collectSelectionIdsByBox(box: AcGeBox2d, mode: AcEdSelectionMode) {
-    const results = this.search(box, { selectionMode: mode })
-    const ids: AcDbObjectId[] = []
-    results.forEach(item => {
-      if (!isEffectiveSpatialQueryHit(item)) {
-        return
-      }
-      ids.push(item.id)
-    })
-    return ids
+    const results = this.search(box, { selectionMode: mode }).filter(
+      isEffectiveSpatialQueryHit
+    )
+    if (mode === 'crossing') {
+      return this.refineCrossingSelectionHits(box, results)
+    }
+    return results.map(item => item.id)
+  }
+
+  /**
+   * Optional crossing-selection refinement after the spatial query.
+   *
+   * Default keeps the AABB hits unchanged. {@link AcTrView2d} overrides this
+   * to test curve geometry against the pick box.
+   */
+  protected refineCrossingSelectionHits(
+    _box: AcGeBox2d,
+    results: AcEdSpatialQueryResultItemEx[]
+  ): AcDbObjectId[] {
+    return results.map(item => item.id)
   }
 
   /**
@@ -1088,13 +1137,13 @@ export abstract class AcEdBaseView {
   ): { x: number; y: number } {
     const cursorWcs = { x: cursor.x, y: cursor.y, z: 0 }
     this._overlayGripOsnapMarkers ??= new AcEdMarkerManager(this)
-    this._overlayGripOsnapMarkers.hideMarker()
     const snapPoint = this._osnapResolver.resolve({
       cursorWcs,
       lastPoint: lastPoint
         ? { x: lastPoint.x, y: lastPoint.y, z: 0 }
         : cursorWcs
     })
+    this._lastOverlayGripOsnap = snapPoint ?? null
     this._overlayGripOsnapMarkers.setHintMarkers(
       AcEdOsnapResolver.displayCenterMarks(
         this._osnapResolver.acquiredCenterMarks,
@@ -1102,24 +1151,63 @@ export abstract class AcEdBaseView {
       )
     )
     if (snapPoint) {
-      this._overlayGripOsnapMarkers.showMarker(
+      this._overlayGripOsnapMarkers.showOrRepositionMarker(
         snapPoint,
         AcEdOsnapResolver.osnapModeToMarkerType(snapPoint.type)
       )
       return { x: snapPoint.x, y: snapPoint.y }
     }
+    this._overlayGripOsnapMarkers.hideMarker()
     return { x: cursor.x, y: cursor.y }
+  }
+
+  /**
+   * Last object snap from {@link resolveOverlayGripPoint}, or `null` when the
+   * cursor is not within aperture of any snap.
+   */
+  get lastOverlayGripOsnap(): AcEdOsnapPoint | null {
+    return this._lastOverlayGripOsnap
+  }
+
+  /**
+   * Shows or repositions the shared mobile snap loupe around a client sample.
+   * Used by overlay grip drag and point pick on phone/pad.
+   *
+   * @param clientX - Sample X in viewport/client CSS pixels.
+   * @param clientY - Sample Y in viewport/client CSS pixels.
+   * @param snap - Active object snap in world space, if any.
+   */
+  refreshMobileSnapLoupe(
+    clientX: number,
+    clientY: number,
+    snap?: { x: number; y: number; type: number } | null
+  ): void {
+    acedRefreshMobileSnapLoupe(this, clientX, clientY, snap)
+  }
+
+  /**
+   * Hides the shared mobile snap loupe for this view.
+   */
+  hideMobileSnapLoupe(): void {
+    acedHideMobileSnapLoupe(this)
   }
 
   /**
    * Hides overlay grip snap markers and clears acquired centers.
    */
   clearOverlayGripOsnap(): void {
+    this._lastOverlayGripOsnap = null
     this._overlayGripOsnapMarkers?.clear()
     this._osnapResolver.clearAcquiredCenters()
   }
 
-  protected onWindowResize() {
+  /**
+   * Updates {@link width} / {@link height} from the size callback or canvas
+   * client size without notifying listeners. Subclasses that must sync
+   * projection (camera frustum, renderer buffer) before notifying should call
+   * this first, then dispatch {@link events.viewResize} themselves.
+   */
+  protected refreshViewSize() {
     if (this._calculateSizeCallback) {
       const { width, height } = this._calculateSizeCallback()
       this._width = Math.max(1, Math.floor(width))
@@ -1128,6 +1216,10 @@ export abstract class AcEdBaseView {
       this._width = Math.max(1, Math.floor(this._canvas.clientWidth))
       this._height = Math.max(1, Math.floor(this._canvas.clientHeight))
     }
+  }
+
+  protected onWindowResize() {
+    this.refreshViewSize()
     this.events.viewResize.dispatch({
       width: this._width,
       height: this._height

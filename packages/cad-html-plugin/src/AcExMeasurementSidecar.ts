@@ -22,7 +22,7 @@ export const ACEX_MEASUREMENT_LINE_WEIGHT = 0
 export const ACEX_MEASUREMENT_FONT_SIZE = 13
 
 /** Map CAD line weight to canvas stroke width in CSS pixels. */
-export function acExMeasureCanvasLineWidth(weight?: number): number {
+export function acexMeasureCanvasLineWidth(weight?: number): number {
   if (weight == null || !Number.isFinite(weight) || weight <= 0) return 0
   return Math.max(1, weight / 28)
 }
@@ -32,6 +32,7 @@ const MEASUREMENT_TYPES: readonly AcExMeasurementType[] = [
   'angle',
   'area',
   'arc',
+  'radius',
   'point'
 ]
 
@@ -73,6 +74,10 @@ function parseStyle(raw: unknown): AcExMeasurementSidecarStyle | undefined {
     color: raw.color,
     lineWeight: ACEX_MEASUREMENT_LINE_WEIGHT,
     fontSize,
+    textHeightMode:
+      raw.textHeightMode === 'custom' || raw.textHeightMode === 'adaptive'
+        ? raw.textHeightMode
+        : undefined,
     textHeightWcs: parsePositiveNumber(raw.textHeightWcs),
     arrowSizeWcs: parsePositiveNumber(raw.arrowSizeWcs)
   }
@@ -114,6 +119,9 @@ function parseGeometry(
         end: raw.end,
         ...(isPoint(raw.through) ? { through: raw.through } : {})
       }
+    case 'radius':
+      if (!isPoint(raw.center) || !isPoint(raw.point)) return undefined
+      return { type, center: raw.center, point: raw.point }
     case 'point':
       if (!isPoint(raw.position)) return undefined
       return { type, position: raw.position }
@@ -195,9 +203,9 @@ export function stringifyAcExMeasurementSidecar(
 
 /**
  * Suggested sidecar file name for a drawing.
- * @example acExMeasurementSidecarFileName('plan.dwg') → 'plan.measurement.json'
+ * @example acexMeasurementSidecarFileName('plan.dwg') → 'plan.measurement.json'
  */
-export function acExMeasurementSidecarFileName(drawingName?: string): string {
+export function acexMeasurementSidecarFileName(drawingName?: string): string {
   if (!drawingName) return 'drawing.measurement.json'
   const base = drawingName.replace(/\.(dwg|dxf|html)$/i, '')
   return `${base}.measurement.json`

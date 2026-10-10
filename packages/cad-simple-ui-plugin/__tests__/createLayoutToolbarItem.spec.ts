@@ -22,24 +22,27 @@ const mockLayouts = [
 
 let currentSpaceId = 'btr-model'
 
-jest.mock('@mlightcad/cad-simple-viewer', () => ({
-  AcApDocManager: {
-    instance: {
-      get curDocument() {
-        return {
-          database: {
-            currentSpaceId,
-            objects: {
-              layout: {
-                newIterator: () => mockLayouts
+jest.mock('@mlightcad/cad-simple-viewer', () => {
+  const { createCadSimpleViewerMock } = require('./helpers/mockCadSimpleViewer')
+  return createCadSimpleViewerMock({
+    AcApDocManager: {
+      instance: {
+        get curDocument() {
+          return {
+            database: {
+              currentSpaceId,
+              objects: {
+                layout: {
+                  newIterator: () => mockLayouts
+                }
               }
             }
           }
         }
       }
     }
-  }
-}))
+  })
+})
 
 jest.mock('@mlightcad/data-model', () => ({
   acdbHostApplicationServices: () => ({
@@ -69,6 +72,23 @@ describe('acuiCreateLayoutToolbarItem', () => {
       'Layout2',
       'Layout1'
     ])
+  })
+
+  it('dedupes alias dictionary keys that share a block table record id', () => {
+    mockLayouts.push({
+      layoutName: 'Model',
+      tabOrder: 0,
+      blockTableRecordId: 'btr-model'
+    })
+    try {
+      expect(acuiListDocumentLayouts().map(layout => layout.name)).toEqual([
+        'Model',
+        'Layout2',
+        'Layout1'
+      ])
+    } finally {
+      mockLayouts.pop()
+    }
   })
 
   it('marks the current space as active', () => {

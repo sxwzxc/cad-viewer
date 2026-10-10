@@ -28,8 +28,12 @@ export const ICON_PAN =
   '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 20 20"><path fill="currentColor" d="M15.08 12.8537l.002-.002V5.5897c0-.422-.652-.414-.652 0v3.466c0 .938-1.482.95-1.482 0v-4.83c0-.414-.6381-.414-.6381 0h-.014v4.83c.014.95-1.482.95-1.482 0V3.4437c0-.42-.638-.414-.638 0v5.612c0 .95-1.494.95-1.494 0V4.2317c0-.408-.64-.42-.64 0v6.756c0 .802-1.094 1.088-1.494.388-.26-.446-.518-.892-.776-1.338-.338-.482-1.1-.15-.794.38.326.566.652 1.132.978 1.698.006.012.014.026.02.04.552.946 1.106 1.89 1.658 2.834.19.3.422.578.666.802h-.006c.672.61 1.528.964 2.418 1.052.888.06 1.7921-.124 2.5601-.612.3-.19.572-.416.816-.68.326-.368.57-.776.734-1.204.176-.482.258-.97.258-1.494Zm-.91-8.608-.004-.002c.958-.38 2.058.244 2.058 1.346v7.266c0 .652-.108 1.29-.332 1.894-.216.564-.53 1.114-.964 1.576-.318.34-.666.632-1.046.884-.978.612-2.1461.862-3.2601.774-1.128-.102-2.228-.564-3.098-1.352-.326-.292-.612-.646-.87-1.034-.558-.96-1.114-1.92-1.672-2.88l-.012-.028c-.326-.568-.652-1.138-.978-1.706-.59-1.018.068-2.186 1.156-2.336.536-.074 1.126.116 1.562.72.026.028.04.062.054.096.04.074.082.146.122.218V4.2337c0-1.176 1.244-1.788 2.202-1.278.42-1.278 2.378-1.264 2.792-.014.9721-.51 2.2221.102 2.2221 1.284v.06c.022-.014.046-.026.068-.04Z"/></svg>'
 
 /** Zoom extents icon. */
+const ZOOM_EXTENT_GLYPH =
+  '<path fill="currentColor" d="M9.3333 14.125 5.875 10.6667V14.125H9.3333Zm4.7917-3.4583-3.4583 3.4583H14.125V10.6667ZM10.6667 5.875 14.125 9.3333V5.875H10.6667ZM5.875 9.3333 9.3333 5.875H5.875V9.3333Zm9.2083 5.475c1.2333-1.3 1.9083-3.0333 1.9083-4.825-.0083-3.325-2.35-6.1833-5.6083-6.8417C8.125 2.4833 4.85 4.2 3.55 7.2583c-1.3 3.0583-.275 6.6083 2.4583 8.5 2.725 1.8917 6.4167 1.6 8.8167-.6917.0917-.0833.175-.175.2583-.2583Zm1.2583.5917 2.575 2.575c-.3167.3167-.625.625-.9417.9417-.8583-.8583-1.7167-1.7167-2.575-2.575-3.4083 2.9-8.4917 2.5917-11.525-.6917S.9417 7.275 4.1083 4.1083C7.2667.9417 12.3667.8417 15.65 3.875s3.5917 8.1167.6917 11.525Z"/>'
+
+/** Zoom extents icon. */
 export const ICON_ZOOM_EXTENT =
-  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 20 20"><path fill="currentColor" d="M9.3333 14.125 5.875 10.6667V14.125H9.3333Zm4.7917-3.4583-3.4583 3.4583H14.125V10.6667ZM10.6667 5.875 14.125 9.3333V5.875H10.6667ZM5.875 9.3333 9.3333 5.875H5.875V9.3333Zm9.2083 5.475c1.2333-1.3 1.9083-3.0333 1.9083-4.825-.0083-3.325-2.35-6.1833-5.6083-6.8417C8.125 2.4833 4.85 4.2 3.55 7.2583c-1.3 3.0583-.275 6.6083 2.4583 8.5 2.725 1.8917 6.4167 1.6 8.8167-.6917.0917-.0833.175-.175.2583-.2583Zm1.2583.5917 2.575 2.575c-.3167.3167-.625.625-.9417.9417-.8583-.8583-1.7167-1.7167-2.575-2.575-3.4083 2.9-8.4917 2.5917-11.525-.6917S.9417 7.275 4.1083 4.1083C7.2667.9417 12.3667.8417 15.65 3.875s3.5917 8.1167.6917 11.525Z"/></svg>'
+  `<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 20 20">${ZOOM_EXTENT_GLYPH}</svg>`
 
 /** Zoom window icon. */
 export const ICON_ZOOM_WINDOW =
@@ -91,6 +95,11 @@ export const ICON_MEASURE_AREA = measureToolIcon(
 /** Measure arc length icon (quarter-arc with grips and a right-angle vertex over a ruler). */
 export const ICON_MEASURE_ARC = measureToolIcon(
   `<g fill="none" stroke-linejoin="miter"><path stroke="currentColor" stroke-width="1.5" stroke-linecap="butt" d="M4.9 11.6A8.3 8.3 0 0 1 13.2 3.3"/><path stroke="currentColor" stroke-width="1.35" stroke-linecap="square" d="M10.4 11.6H13.2V8.8"/><path stroke="currentColor" stroke-width="1.35" stroke-linecap="butt" d="M13.2 11.6v1.7"/><rect stroke="${TOOL_ICON_ACCENT}" stroke-width="1.15" x="3.65" y="10.35" width="2.5" height="2.5"/><rect stroke="${TOOL_ICON_ACCENT}" stroke-width="1.15" x="11.95" y="2.05" width="2.5" height="2.5"/></g>`
+)
+
+/** Measure radius icon (circle with a radial dimension line over a ruler). */
+export const ICON_MEASURE_RADIUS = measureToolIcon(
+  `<circle fill="none" stroke="${TOOL_ICON_ACCENT}" stroke-width="1.4" cx="9.1" cy="7.3" r="4.7"/><circle fill="${TOOL_ICON_ACCENT}" cx="9.1" cy="7.3" r="1.05"/><path fill="none" stroke="${TOOL_ICON_ACCENT}" stroke-width="1.35" stroke-linecap="round" d="M9.1 7.3 13.35 3.7"/><path fill="${TOOL_ICON_ACCENT}" d="M13.35 3.7 11.15 4.2 12.55 5.7Z"/>`
 )
 
 /** Measure point / coordinates icon (axes, dashed projections, and a point over a ruler). */
@@ -193,6 +202,10 @@ export const ICON_MEASUREMENT_PANEL = ICON_MARKUP_PANEL
 export const ICON_MARKUP_IMPORT =
   '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" d="M4.5 2h6.4L15.5 6.6V16.5A1.5 1.5 0 0 1 14 18H4.5A1.5 1.5 0 0 1 3 16.5V3.5A1.5 1.5 0 0 1 4.5 2z"/><path stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" d="M10.9 2v4.6h4.6"/><path stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M10 5.8v6M7.2 9.6 10 12.5l2.8-2.9"/></svg>'
 
+/** Open drawing file toolbar icon (folder + arrow). */
+export const ICON_OPEN =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" d="M2.5 5.5V15a1.5 1.5 0 0 0 1.5 1.5h12A1.5 1.5 0 0 0 17.5 15V7.5A1.5 1.5 0 0 0 16 6H9.2L7.5 4H4A1.5 1.5 0 0 0 2.5 5.5z"/><path stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" d="M10 9.2v4.8M7.6 11.6 10 14l2.4-2.4"/></svg>'
+
 /**
  * Export icon (mirrored document + up arrow).
  * Inspired by Noun Project “export file” 8131193 (Web Buttons by Elin Erkani).
@@ -281,13 +294,28 @@ export const ICON_CHEVRON_RIGHT =
 export const ICON_CHEVRON_LEFT =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" aria-hidden="true"><path fill="currentColor" d="M6.5 10 11 14.5V5.5L6.5 10Z"/></svg>'
 
-/** Restore the view captured when a layout was first framed (ZOOM Original). */
+/** Restore AutoCAD's saved view (VPORT / layout limits). */
 export const ICON_ZOOM_ORIGINAL =
   '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 20 20"><path fill="currentColor" d="M10 2.6 18 9.8h-2.1V17h-4.4v-4.4H8.5V17H4.1V9.8H2L10 2.6Zm0 1.8L5.3 9.8V15.8h2V11.4h5.4v4.4h2V9.8L10 4.4Z"/></svg>'
+
+/**
+ * Intelligent zoom-to-extents: same glyph as {@link ICON_ZOOM_EXTENT}, with a
+ * Material-style AutoAwesome sparkle pair (common “smart / AI” cue) overlaid at
+ * top-right so the badge stays readable at toolbar size.
+ */
+export const ICON_ZOOM_SMART =
+  `<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 20 20">${ZOOM_EXTENT_GLYPH}<path fill="${TOOL_ICON_ACCENT}" d="M14.85 0.85 15.95 4.05 19.15 5.15 15.95 6.25 14.85 9.45 13.75 6.25 10.55 5.15 13.75 4.05Z"/><path fill="${TOOL_ICON_ACCENT}" d="M17.55 8.35 18.15 10.15 19.95 10.75 18.15 11.35 17.55 13.15 16.95 11.35 15.15 10.75 16.95 10.15Z"/></svg>`
 
 /** Settings / gear parent icon for compact toolbars. */
 export const ICON_SETTINGS =
   '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 20 20"><path fill="currentColor" d="M8.08 2.1h3.84l.32 1.52a6.4 6.4 0 0 1 1.36.78l1.48-.64 1.92 1.92-.64 1.48c.3.42.54.88.78 1.36l1.52.32v3.84l-1.52.32a6.4 6.4 0 0 1-.78 1.36l.64 1.48-1.92 1.92-1.48-.64a6.4 6.4 0 0 1-1.36.78l-.32 1.52H8.08l-.32-1.52a6.4 6.4 0 0 1-1.36-.78l-1.48.64-1.92-1.92.64-1.48a6.4 6.4 0 0 1-.78-1.36L1.34 11.92V8.08l1.52-.32c.24-.48.48-.94.78-1.36l-.64-1.48 1.92-1.92 1.48.64c.42-.3.88-.54 1.36-.78L8.08 2.1ZM10 7.2A2.8 2.8 0 1 0 10 12.8 2.8 2.8 0 0 0 10 7.2Z"/></svg>'
+
+/**
+ * Simulated-mouse touch pick toggle: crosshair above a touch contact so the
+ * fingertip does not obscure the sample point.
+ */
+export const ICON_SIMULATED_MOUSE =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 20 20"><path fill="none" stroke="currentColor" stroke-width="1.5" d="M10 2.5v6M7 5.5h6"/><circle cx="10" cy="14.5" r="3.2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="10" cy="14.5" r="1.1" fill="currentColor"/></svg>'
 
 /** Show-all-layers action icon. */
 export const ICON_LAYER_ON =
@@ -337,6 +365,28 @@ export const ICON_MARKUP_HIDE = ICON_ANNOTATION_HIDE
 /** Overflow / more menu icon (horizontal ellipsis). */
 export const ICON_MORE =
   '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 20 20"><circle cx="4" cy="10" r="1.6" fill="currentColor"/><circle cx="10" cy="10" r="1.6" fill="currentColor"/><circle cx="16" cy="10" r="1.6" fill="currentColor"/></svg>'
+
+/** Undo (curved arrow counter-clockwise). */
+export const ICON_UNDO =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>'
+
+/** Redo (curved arrow clockwise). */
+export const ICON_REDO =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>'
+
+/** Erase / delete (trash can). */
+export const ICON_ERASE =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>'
+
+/**
+ * Text height settings: capital A with a teal vertical double-headed arrow.
+ */
+export const ICON_TEXT_HEIGHT =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none"><text x="2" y="18" font-family="Georgia, Times New Roman, serif" font-size="16" font-weight="600" fill="currentColor">A</text><g stroke="#2dd4bf" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M18 4v16"/><path d="M15.5 6.5 18 4l2.5 2.5"/><path d="M15.5 17.5 18 20l2.5-2.5"/></g></svg>'
+
+/** Close / cancel (X). */
+export const ICON_CLOSE =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>'
 
 /**
  * Creates a DOM icon element from an SVG string, element, or factory.

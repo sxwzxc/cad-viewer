@@ -2,18 +2,21 @@ import { AcGeBox2d, AcGePoint2d } from '@mlightcad/data-model'
 
 import { AcEdBaseView } from '../../view'
 import { AcEdMarker, AcEdMarkerType } from '../marker/AcEdMarker'
+import { acedInteractionStrategy } from './AcEdInteractionStrategy'
 import {
-  ACED_SNAP_LOUPE_INSET_PX,
   ACED_SNAP_LOUPE_SIZE_PX,
   ACED_SNAP_LOUPE_ZOOM,
-  acedLoupeLocalFromCanvasDelta
+  acedLoupeLocalFromCanvasDelta,
+  acedResolveLoupePlacement
 } from './AcEdSnapLoupeMath'
 
 export {
+  ACED_SNAP_LOUPE_GAP_BELOW_PROMPT_PX,
   ACED_SNAP_LOUPE_INSET_PX,
   ACED_SNAP_LOUPE_SIZE_PX,
   ACED_SNAP_LOUPE_ZOOM,
-  acedLoupeLocalFromCanvasDelta
+  acedLoupeLocalFromCanvasDelta,
+  acedResolveLoupePlacement
 } from './AcEdSnapLoupeMath'
 
 /**
@@ -72,12 +75,14 @@ export class AcEdSnapLoupe {
     snapCanvas?: { x: number; y: number },
     snapType?: AcEdMarkerType
   ) {
-    const size = ACED_SNAP_LOUPE_SIZE_PX
-    const inset = ACED_SNAP_LOUPE_INSET_PX
+    const placement = acedResolveLoupePlacement(this.view.container, {
+      usesSessionChrome: acedInteractionStrategy().point.usesSessionChrome
+    })
+    const { x: inset, y: top, size } = placement
     const viewBox = acedLoupeViewBoxFromCanvasSample(this.view, canvasX, canvasY)
-    this.view.setSnapLoupe({ x: inset, y: inset, size, viewBox })
+    this.view.setSnapLoupe({ x: inset, y: top, size, viewBox })
 
-    const host = this.view.canvasToContainer({ x: inset, y: inset })
+    const host = this.view.canvasToContainer({ x: inset, y: top })
     this.root.style.left = `${host.x}px`
     this.root.style.top = `${host.y}px`
     this.root.style.display = 'block'

@@ -10,10 +10,56 @@
     <div class="ml-export-html-dlg">
       <el-tabs v-model="activeTab" class="ml-export-html-dlg__tabs">
         <el-tab-pane
-          :label="t('dialog.exportHtmlDlg.tabExport')"
-          name="export"
+          :label="t('dialog.exportHtmlDlg.tabData')"
+          name="data"
         >
           <div class="ml-export-html-dlg__tab-body">
+            <ml-fieldset-group
+              :title="t('dialog.exportHtmlDlg.exportFormat')"
+              class="ml-export-html-dlg__section"
+            >
+              <el-radio-group
+                v-model="form.exportFormat"
+                class="ml-export-html-dlg__card-group"
+                @change="handleExportFormatChange"
+              >
+                <label
+                  class="ml-export-html-dlg__card"
+                  :class="{ 'is-selected': form.exportFormat === 'single' }"
+                >
+                  <el-radio
+                    value="single"
+                    class="ml-export-html-dlg__card-radio"
+                  />
+                  <span class="ml-export-html-dlg__card-body">
+                    <span class="ml-export-html-dlg__card-title">{{
+                      t('dialog.exportHtmlDlg.exportFormatSingle')
+                    }}</span>
+                    <span class="ml-export-html-dlg__card-hint">{{
+                      t('dialog.exportHtmlDlg.exportFormatSingleHint')
+                    }}</span>
+                  </span>
+                </label>
+                <label
+                  class="ml-export-html-dlg__card"
+                  :class="{ 'is-selected': form.exportFormat === 'multi' }"
+                >
+                  <el-radio
+                    value="multi"
+                    class="ml-export-html-dlg__card-radio"
+                  />
+                  <span class="ml-export-html-dlg__card-body">
+                    <span class="ml-export-html-dlg__card-title">{{
+                      t('dialog.exportHtmlDlg.exportFormatMulti')
+                    }}</span>
+                    <span class="ml-export-html-dlg__card-hint">{{
+                      t('dialog.exportHtmlDlg.exportFormatMultiHint')
+                    }}</span>
+                  </span>
+                </label>
+              </el-radio-group>
+            </ml-fieldset-group>
+
             <div class="ml-export-html-dlg__settings-row">
               <ml-fieldset-group
                 :title="t('dialog.exportHtmlDlg.layersSection')"
@@ -59,7 +105,14 @@
                 </div>
               </ml-fieldset-group>
             </div>
+          </div>
+        </el-tab-pane>
 
+        <el-tab-pane
+          :label="t('dialog.exportHtmlDlg.tabDisplay')"
+          name="display"
+        >
+          <div class="ml-export-html-dlg__tab-body">
             <ml-fieldset-group
               :title="t('dialog.exportHtmlDlg.initialView')"
               class="ml-export-html-dlg__section"
@@ -149,8 +202,17 @@
         <el-tab-pane
           :label="t('dialog.exportHtmlDlg.tabSecurity')"
           name="security"
+          lazy
+          :disabled="form.exportFormat === 'multi'"
         >
           <div class="ml-export-html-dlg__tab-body">
+            <p
+              v-if="form.exportFormat === 'multi'"
+              class="ml-export-html-dlg__section-hint"
+            >
+              {{ t('dialog.exportHtmlDlg.securitySingleOnlyHint') }}
+            </p>
+            <template v-else>
             <ml-fieldset-group
               :title="t('dialog.exportHtmlDlg.expirySection')"
               class="ml-export-html-dlg__section"
@@ -198,13 +260,23 @@
               class="ml-export-html-dlg__section"
             >
               <div class="ml-export-html-dlg__password-row">
+                <!--
+                  Optional field: block password-manager autofill/auto-generate.
+                  Lazy security tab keeps the input out of the DOM until opened;
+                  readonly-until-focus stops fill on mount; new-password matches
+                  the HTML converter example.
+                -->
                 <el-input
                   v-model="form.password"
                   type="password"
+                  autocomplete="new-password"
+                  name="mlcad-html-export-password"
                   show-password
                   clearable
+                  :readonly="passwordFieldLocked"
                   :placeholder="t('dialog.exportHtmlDlg.passwordPlaceholder')"
                   class="ml-export-html-dlg__password-input"
+                  @focus="unlockPasswordField"
                 />
                 <div class="ml-export-html-dlg__password-actions">
                   <el-button @click="generatePassword">
@@ -222,6 +294,7 @@
                 {{ t('dialog.exportHtmlDlg.passwordHint') }}
               </p>
             </ml-fieldset-group>
+            </template>
           </div>
         </el-tab-pane>
       </el-tabs>
@@ -237,6 +310,7 @@
  */
 import type {
   AcApHtmlExpiryDays,
+  AcApHtmlExportFormat,
   AcApHtmlExportOptions,
   AcExInitialViewMode,
   AcExViewerMode
@@ -253,7 +327,7 @@ import {
   ElTabPane,
   ElTabs
 } from 'element-plus'
-import { computed, reactive, ref } from 'vue'
+import { computed, nextTick, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import MlBaseDialog from '../common/MlBaseDialog.vue'
@@ -281,6 +355,10 @@ export interface MlExportHtmlDlgProps {
  * each time the dialog opens.
  */
 export interface MlExportHtmlDlgForm {
+  /**
+   * Packaging mode: self-contained HTML or multi-file package zip.
+   */
+  exportFormat: AcApHtmlExportFormat
   /**
    * When `true`, off/frozen layer geometry is included in the exported snapshot.
    */
@@ -321,7 +399,13 @@ const emit = defineEmits<MlExportHtmlDlgEmits>()
 
 const { t } = useI18n()
 
-const activeTab = ref<'export' | 'security'>('export')
+const activeTab = ref<'data' | 'display' | 'security'>('data')
+
+/**
+ * When `true`, the password input is read-only so managers cannot autofill or
+ * auto-generate into the empty optional field before the user focuses it.
+ */
+const passwordFieldLocked = ref(true)
 
 /** Bridges `v-model` on the base dialog to `modelValue` / `update:modelValue`. */
 const visible = computed({
@@ -334,6 +418,7 @@ const canCopyPassword = computed(() => form.password.trim().length > 0)
 
 /** Export options bound to the dialog form controls. */
 const form = reactive<MlExportHtmlDlgForm>({
+  exportFormat: 'single',
   exportInvisibleLayers: true,
   exportLayouts: true,
   initialView: 'fit',
@@ -347,6 +432,7 @@ const form = reactive<MlExportHtmlDlgForm>({
  * Restores {@link form} to HTML export package defaults.
  */
 function resetForm() {
+  form.exportFormat = 'single'
   form.exportInvisibleLayers = true
   form.exportLayouts = true
   form.initialView = 'fit'
@@ -354,7 +440,22 @@ function resetForm() {
   form.expiryDays = 'never'
   form.customExpiresAt = defaultCustomExpiresAt()
   form.password = ''
-  activeTab.value = 'export'
+  passwordFieldLocked.value = true
+  activeTab.value = 'data'
+}
+
+/** Allows typing or Generate after the user intentionally focuses the field. */
+function unlockPasswordField() {
+  passwordFieldLocked.value = false
+}
+
+/**
+ * Leaves the security tab when switching to multi-file export.
+ */
+function handleExportFormatChange() {
+  if (form.exportFormat === 'multi' && activeTab.value === 'security') {
+    activeTab.value = 'data'
+  }
 }
 
 /**
@@ -380,6 +481,7 @@ function isPastExpiryDate(date: Date): boolean {
  * Fills {@link form.password} with a random alphanumeric string.
  */
 function generatePassword() {
+  unlockPasswordField()
   const bytes = new Uint8Array(12)
   crypto.getRandomValues(bytes)
   form.password = Array.from(
@@ -414,9 +516,14 @@ async function copyPassword() {
 
 /**
  * Invoked when the dialog opens; resets the form so each export starts from defaults.
+ * Clears the password again after mount in case a manager fills asynchronously.
  */
 function handleOpen() {
   resetForm()
+  void nextTick(() => {
+    form.password = ''
+    passwordFieldLocked.value = true
+  })
 }
 
 /**
@@ -432,7 +539,7 @@ async function handleOk() {
   const document = docManager.curDocument
   const view = docManager.curView
 
-  if (form.expiryDays === 'custom') {
+  if (form.exportFormat === 'single' && form.expiryDays === 'custom') {
     const customExpiresAt = form.customExpiresAt?.getTime()
     if (customExpiresAt == null || Number.isNaN(customExpiresAt)) {
       ElMessage({
@@ -453,16 +560,20 @@ async function handleOk() {
   }
 
   const options: AcApHtmlExportOptions = {
+    exportFormat: form.exportFormat,
     exportInvisibleLayers: form.exportInvisibleLayers,
     exportLayouts: form.exportLayouts,
     initialView: form.initialView,
     viewerMode: form.viewerMode,
-    expiryDays: form.expiryDays,
+    expiryDays: form.exportFormat === 'multi' ? 'never' : form.expiryDays,
     expiresAt:
-      form.expiryDays === 'custom'
+      form.exportFormat === 'single' && form.expiryDays === 'custom'
         ? (form.customExpiresAt?.getTime() ?? null)
         : null,
-    password: form.password.trim() || undefined
+    password:
+      form.exportFormat === 'single'
+        ? form.password.trim() || undefined
+        : undefined
   }
 
   try {
@@ -560,6 +671,9 @@ async function handleOk() {
   grid-template-columns: 1fr 1fr;
   gap: 8px;
   width: 100%;
+  /* Override Element Plus `.el-radio-group { align-items: center }` so the
+     shorter card (e.g. self-contained HTML) stays top-aligned. */
+  align-items: stretch;
 }
 
 .ml-export-html-dlg__card {

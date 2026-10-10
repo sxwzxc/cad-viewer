@@ -898,6 +898,16 @@ export default {
         local: 'الأصلي',
         global: 'Original'
       },
+      saved: {
+        display: 'المحفوظ(V)',
+        local: 'المحفوظ',
+        global: 'Saved'
+      },
+      smart: {
+        display: 'ذكي(I)',
+        local: 'ذكي',
+        global: 'Smart'
+      },
       scale: {
         display: 'مقياس(S)',
         local: 'مقياس',
@@ -1712,6 +1722,32 @@ export default {
     }
   },
 
+  bmpout: {
+    ...enJig.bmpout,
+
+    boundsFirstCorner:
+      'حدد الركن الأول لحدود الصورة',
+
+    boundsSecondCorner:
+      'حدد الركن المقابل',
+
+    longSidePrompt:
+      'أدخل حجم الضلع الأطول بالبكسل'
+  },
+
+  jpgout: {
+    ...enJig.jpgout,
+
+    boundsFirstCorner:
+      'حدد الركن الأول لحدود الصورة',
+
+    boundsSecondCorner:
+      'حدد الركن المقابل',
+
+    longSidePrompt:
+      'أدخل حجم الضلع الأطول بالبكسل'
+  },
+
   pngout: {
     ...enJig.pngout,
 
@@ -1971,6 +2007,9 @@ export default {
   chtml: {
     ...enJig.chtml,
 
+    exportFormat:
+      'تنسيق التصدير',
+
     exportInvisibleLayers:
       'تصدير الطبقات غير المرئية',
 
@@ -1985,6 +2024,16 @@ export default {
   ,
     keywords: {
       ...enJig.chtml.keywords,
+      single: {
+        display: 'ملف واحد(S)',
+        local: 'ملف واحد',
+        global: 'Single'
+      },
+      multi: {
+        display: 'حزمة متعددة الملفات(M)',
+        local: 'حزمة متعددة الملفات',
+        global: 'Multi'
+      },
       yes: {
         display: 'نعم(Y)',
         local: 'نعم',
@@ -2016,5 +2065,36 @@ export default {
         global: 'Measure'
       },
     },
+  },
+
+  cpdf: {
+    ...enJig.cpdf,
+    modelSpaceFit:
+      'إطار مساحة النموذج',
+    exportLayouts: 'تصدير المخططات',
+    textMode: 'عرض النص',
+    keywords: {
+      ...enJig.cpdf.keywords,
+      extents: {
+        display: 'الامتدادات(E)',
+        local: 'الامتدادات',
+        global: 'Extents'
+      },
+      display: {
+        display: 'العرض(D)',
+        local: 'العرض',
+        global: 'Display'
+      },
+      yes: {
+        display: 'نعم(Y)',
+        local: 'نعم',
+        global: 'Yes'
+      },
+      no: {
+        display: 'لا(N)',
+        local: 'لا',
+        global: 'No'
+      }
+    }
   }
 }

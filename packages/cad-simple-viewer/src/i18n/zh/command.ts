@@ -27,11 +27,17 @@ export default {
     auprec: {
       description: '设置角度显示精度（小数位数），与 AUNITS 配合使用'
     },
+    bmpout: {
+      description: '导出为 BMP 图片'
+    },
     cdxf: {
       description: '导出当前图纸为DXF格式'
     },
     cpdf: {
       description: '导出当前图纸为PDF格式'
+    },
+    '-cpdf': {
+      description: '使用命令行选项将当前图纸导出为PDF'
     },
     cecolor: {
       description: '设置新创建对象的当前默认颜色'
@@ -186,6 +192,9 @@ export default {
     },
     insunits: {
       description: '指定插入块、图像或外部参照时用于自动缩放的图形单位'
+    },
+    jpgout: {
+      description: '导出为 JPEG 图片'
     },
     laycur: {
       description: '将所选对象的图层属性更改为当前图层',

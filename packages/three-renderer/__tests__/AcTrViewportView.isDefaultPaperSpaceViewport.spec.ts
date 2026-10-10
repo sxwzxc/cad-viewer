@@ -1,13 +1,21 @@
 import { AcGePoint3d, AcGiViewport } from '@mlightcad/data-model'
+import * as THREE from 'three'
 
 import { AcTrRenderer } from '../src/renderer'
 import { AcTrBaseView } from '../src/viewport/AcTrBaseView'
 import { AcTrViewportView } from '../src/viewport/AcTrViewportView'
 
-function createMockRenderer(): AcTrRenderer {
+function createMockRenderer(
+  onRender?: (scene: THREE.Object3D) => void
+): AcTrRenderer {
   return {
     domElement: {} as HTMLCanvasElement,
-    render: jest.fn()
+    setViewport: jest.fn(),
+    setScissor: jest.fn(),
+    setScissorTest: jest.fn(),
+    render: jest.fn((scene: THREE.Object3D) => {
+      onRender?.(scene)
+    })
   } as unknown as AcTrRenderer
 }
 
@@ -54,6 +62,149 @@ describe('AcTrViewportView twist', () => {
     expect(corner.x).toBeCloseTo(50)
     expect(corner.y).toBeCloseTo(200)
     expect(view.internalCamera.rotation.z).toBeCloseTo(0)
+  })
+})
+
+describe('AcTrViewportView.computeOnscreenPass', () => {
+  it('clips an oversized paper-viewport window to the parent canvas', () => {
+    const parent = new AcTrBaseView(createMockRenderer(), 800, 600)
+    parent.internalCamera.position.set(5, 5, 500)
+    parent.internalCamera.zoom = 10000
+    parent.internalCamera.updateProjectionMatrix()
+    parent.internalCamera.updateMatrixWorld()
+
+    const view = new AcTrViewportView(
+      parent,
+      createViewport(0),
+      createMockRenderer()
+    )
+    const pass = view.computeOnscreenPass()
+    expect(pass).not.toBeNull()
+    expect(pass!.hit.x).toBeGreaterThanOrEqual(-1e-6)
+    expect(pass!.hit.y).toBeGreaterThanOrEqual(-1e-6)
+    expect(pass!.hit.x + pass!.hit.width).toBeLessThanOrEqual(800 + 1e-6)
+    expect(pass!.hit.y + pass!.hit.height).toBeLessThanOrEqual(600 + 1e-6)
+
+    const full = view.viewport.viewBox
+    const visibleW = pass!.modelBox.max.x - pass!.modelBox.min.x
+    const fullW = full.max.x - full.min.x
+    expect(visibleW).toBeLessThan(fullW * 0.5)
+  })
+
+  it('keeps the full DCS view box when the paper viewport is on-screen', () => {
+    const parent = new AcTrBaseView(createMockRenderer(), 800, 600)
+    const view = new AcTrViewportView(
+      parent,
+      createViewport(Math.PI / 4),
+      createMockRenderer()
+    )
+    const pass = view.computeOnscreenPass()
+    expect(pass).not.toBeNull()
+    const full = view.viewport.viewBox
+    expect(pass!.modelBox.min.x).toBeCloseTo(full.min.x)
+    expect(pass!.modelBox.min.y).toBeCloseTo(full.min.y)
+    expect(pass!.modelBox.max.x).toBeCloseTo(full.max.x)
+    expect(pass!.modelBox.max.y).toBeCloseTo(full.max.y)
+  })
+
+  it('returns null when the paper viewport is fully off-screen', () => {
+    const parent = new AcTrBaseView(createMockRenderer(), 800, 600)
+    parent.internalCamera.position.set(1e6, 1e6, 500)
+    parent.internalCamera.updateProjectionMatrix()
+    parent.internalCamera.updateMatrixWorld()
+
+    const view = new AcTrViewportView(
+      parent,
+      createViewport(0),
+      createMockRenderer()
+    )
+    expect(view.computeOnscreenPass()).toBeNull()
+  })
+})
+
+describe('AcTrViewportView.render frozen layers', () => {
+  it('hides named layer groups listed in frozenLayers for the render pass only', () => {
+    const parent = new AcTrBaseView(createMockRenderer(), 800, 600)
+    let duringRender: {
+      frozenA: boolean
+      frozenB: boolean
+      kept: boolean
+    } | null = null
+
+    const scene = new THREE.Group()
+    const frozenA = new THREE.Group()
+    frozenA.name = 'FrozenA'
+    const frozenB = new THREE.Group()
+    frozenB.name = 'FrozenB'
+    frozenB.visible = false
+    const kept = new THREE.Group()
+    kept.name = 'Keep'
+    scene.add(frozenA, frozenB, kept)
+
+    const renderer = createMockRenderer(() => {
+      duringRender = {
+        frozenA: frozenA.visible,
+        frozenB: frozenB.visible,
+        kept: kept.visible
+      }
+    })
+    const source = createViewport(0)
+    source.frozenLayers = ['FrozenA', 'FrozenB']
+    const view = new AcTrViewportView(parent, source, renderer)
+    expect(view.viewport).not.toBe(source)
+    expect(view.viewport.frozenLayers).toEqual(['FrozenA', 'FrozenB'])
+
+    view.render(scene)
+
+    expect(renderer.render).toHaveBeenCalledTimes(1)
+    expect(duringRender).toEqual({
+      frozenA: false,
+      frozenB: false,
+      kept: true
+    })
+    expect(frozenA.visible).toBe(true)
+    expect(frozenB.visible).toBe(false)
+    expect(kept.visible).toBe(true)
+  })
+
+  it('does not change layer visibility when frozenLayers is empty', () => {
+    const parent = new AcTrBaseView(createMockRenderer(), 800, 600)
+    const scene = new THREE.Group()
+    const layer = new THREE.Group()
+    layer.name = '0'
+    scene.add(layer)
+
+    let duringRenderVisible = false
+    const renderer = createMockRenderer(() => {
+      duringRenderVisible = layer.visible
+    })
+    const view = new AcTrViewportView(parent, createViewport(0), renderer)
+
+    view.render(scene)
+
+    expect(duringRenderVisible).toBe(true)
+    expect(layer.visible).toBe(true)
+    expect(renderer.render).toHaveBeenCalledTimes(1)
+  })
+
+  it('restores layer visibility when the draw callback throws', () => {
+    const parent = new AcTrBaseView(createMockRenderer(), 800, 600)
+    const scene = new THREE.Group()
+    const frozen = new THREE.Group()
+    frozen.name = 'FrozenA'
+    scene.add(frozen)
+
+    const source = createViewport(0)
+    source.frozenLayers = ['FrozenA']
+    const view = new AcTrViewportView(parent, source, createMockRenderer())
+
+    expect(() =>
+      view.withFrozenLayersHidden(scene, () => {
+        expect(frozen.visible).toBe(false)
+        throw new Error('render failed')
+      })
+    ).toThrow('render failed')
+    expect(frozen.visible).toBe(true)
   })
 })
 
